@@ -1,14 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ProjectsTable } from '@/components/ProjectsTable';
-
-export default function Home() {
-  return (
-    <div className="container mx-auto p-4">
-      <h1 className="text-3xl font-bold mb-6">Dashboard FROZZ</h1>
-      <ProjectsTable />
-    </div>
-  );
-}
 import { FrozzMes } from "@/components/mes/FrozzMes";
 
 export const Route = createFileRoute("/")({

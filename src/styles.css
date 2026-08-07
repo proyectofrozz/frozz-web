@@ -74,6 +74,8 @@
   --color-stage-electrical: var(--stage-electrical);
   --color-stage-refrigeration: var(--stage-refrigeration);
   --color-stage-assembly: var(--stage-assembly);
+  --color-stage-design: var(--stage-design);
+  --color-stage-not-started: var(--stage-not-started);
 }
 
 :root {
@@ -114,6 +116,8 @@
   --stage-electrical: oklch(0.65 0.18 220);
   --stage-refrigeration: oklch(0.65 0.14 195);
   --stage-assembly: oklch(0.55 0.18 265);
+  --stage-design: oklch(0.6 0.15 300);
+  --stage-not-started: oklch(0.6 0.01 250);
 
   --shadow-card: 0 1px 2px oklch(0.2 0.02 250 / 0.06), 0 6px 16px oklch(0.2 0.02 250 / 0.05);
   --chart-1: oklch(0.646 0.222 41.116);

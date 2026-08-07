@@ -1,5 +1,6 @@
 // src/components/ProjectsTable.tsx
-// Componente para mostrar tabla de proyectos sincronizados con Notion
+// Tabla de proyectos sincronizada con Notion, usando el modelo centralizado
+// en src/lib/notion/mapper.ts (misma fuente de verdad que FrozzMes).
 
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -8,41 +9,44 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { toast } from 'sonner';
+import {
+  ORDEN_ESTACIONES,
+  ESTADO_INICIAL,
+  formatProjectCode,
+  orSinInformacion,
+  type Proyecto,
+  type EstadoProyecto,
+} from '@/lib/notion/mapper';
 
-interface Proyecto {
-  id: string;
-  codigoProyecto: string;
-  equipo: string;
-  cliente: string;
-  personaACargo: string;
-  fechaInicio: string;
-  fechaEstimadaEntrega: string;
-  estado: string;
-  avance: number;
-  prioridad: string;
-  entradaAEstacion: string;
-}
+type EditableFields = Partial<
+  Pick<
+    Proyecto,
+    'equipo' | 'cliente' | 'personaACargo' | 'estado' | 'avance' | 'prioridad' | 'fechaEstimadaEntrega'
+  >
+>;
+
+const ESTADOS_DISPONIBLES: EstadoProyecto[] = [ESTADO_INICIAL, ...ORDEN_ESTACIONES];
 
 export function ProjectsTable() {
   const [proyectos, setProyectos] = useState<Proyecto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingData, setEditingData] = useState<Partial<Proyecto>>({});
+  const [editingData, setEditingData] = useState<EditableFields>({});
   const [syncing, setSyncing] = useState(false);
 
-  // Cargar datos de Notion
+  // Cargar datos reales de Notion
   const fetchProjects = async () => {
     try {
       setLoading(true);
       const response = await fetch('/api/notion/read');
-      
+
       if (!response.ok) {
         throw new Error('Failed to fetch projects');
       }
 
       const data = await response.json();
-      setProyectos(data.proyectos);
+      setProyectos(data.proyectos ?? []);
       setError(null);
     } catch (err: any) {
       setError(err.message);
@@ -56,15 +60,15 @@ export function ProjectsTable() {
     fetchProjects();
   }, []);
 
-  // Actualizar un proyecto
-  const handleUpdate = async (pageId: string) => {
+  // Actualizar un proyecto en Notion, identificado por notionPageId
+  const handleUpdate = async (notionPageId: string) => {
     try {
       setSyncing(true);
       const response = await fetch('/api/notion/update', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          pageId,
+          notionPageId,
           ...editingData,
         }),
       });
@@ -76,7 +80,7 @@ export function ProjectsTable() {
       toast.success('Proyecto actualizado en Notion');
       setEditingId(null);
       setEditingData({});
-      fetchProjects(); // Recarga los datos
+      fetchProjects(); // Recarga los datos reales desde Notion
     } catch (err: any) {
       toast.error('Error al actualizar proyecto: ' + err.message);
     } finally {
@@ -87,7 +91,15 @@ export function ProjectsTable() {
   // Editar un campo
   const handleEdit = (proyecto: Proyecto) => {
     setEditingId(proyecto.id);
-    setEditingData({ ...proyecto });
+    setEditingData({
+      equipo: proyecto.equipo,
+      cliente: proyecto.cliente,
+      personaACargo: proyecto.personaACargo,
+      estado: proyecto.estado,
+      avance: proyecto.avance,
+      prioridad: proyecto.prioridad,
+      fechaEstimadaEntrega: proyecto.fechaEstimadaEntrega ?? '',
+    });
   };
 
   // Cancelar edición
@@ -125,7 +137,7 @@ export function ProjectsTable() {
         </CardHeader>
         <CardContent>
           <div className="text-center py-8 text-red-600">
-            Error: {error}
+            No se pudieron cargar los proyectos: {error}
           </div>
           <Button onClick={fetchProjects} className="w-full">
             Reintentar
@@ -149,6 +161,11 @@ export function ProjectsTable() {
         </Button>
       </CardHeader>
       <CardContent>
+        {proyectos.length === 0 ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            No hay proyectos disponibles.
+          </div>
+        ) : (
         <div className="overflow-x-auto">
           <Table>
             <TableHeader>
@@ -169,17 +186,8 @@ export function ProjectsTable() {
                 <TableRow key={proyecto.id}>
                   {editingId === proyecto.id ? (
                     <>
-                      <TableCell>
-                        <Input
-                          value={editingData.codigoProyecto || ''}
-                          onChange={(e) =>
-                            setEditingData({
-                              ...editingData,
-                              codigoProyecto: e.target.value,
-                            })
-                          }
-                          className="w-24"
-                        />
+                      <TableCell className="font-mono text-xs text-muted-foreground">
+                        {formatProjectCode(proyecto.codigoProyecto)}
                       </TableCell>
                       <TableCell>
                         <Input
@@ -219,33 +227,34 @@ export function ProjectsTable() {
                       </TableCell>
                       <TableCell>
                         <Select
-                          value={editingData.estado || ''}
+                          value={editingData.estado || ESTADO_INICIAL}
                           onValueChange={(value) =>
                             setEditingData({
                               ...editingData,
-                              estado: value,
+                              estado: value as EstadoProyecto,
                             })
                           }
                         >
-                          <SelectTrigger className="w-24">
+                          <SelectTrigger className="w-32">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="Por Iniciar">Por Iniciar</SelectItem>
-                            <SelectItem value="En Progreso">En Progreso</SelectItem>
-                            <SelectItem value="Completado">Completado</SelectItem>
-                            <SelectItem value="Pausado">Pausado</SelectItem>
+                            {ESTADOS_DISPONIBLES.map((estado) => (
+                              <SelectItem key={estado} value={estado}>
+                                {estado}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </TableCell>
                       <TableCell>
                         <Input
                           type="number"
-                          value={editingData.avance || 0}
+                          value={editingData.avance ?? 0}
                           onChange={(e) =>
                             setEditingData({
                               ...editingData,
-                              avance: parseInt(e.target.value) || 0,
+                              avance: parseInt(e.target.value, 10) || 0,
                             })
                           }
                           className="w-20"
@@ -254,24 +263,16 @@ export function ProjectsTable() {
                         />
                       </TableCell>
                       <TableCell>
-                        <Select
+                        <Input
                           value={editingData.prioridad || ''}
-                          onValueChange={(value) =>
+                          onChange={(e) =>
                             setEditingData({
                               ...editingData,
-                              prioridad: value,
+                              prioridad: e.target.value,
                             })
                           }
-                        >
-                          <SelectTrigger className="w-20">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="Alta">Alta</SelectItem>
-                            <SelectItem value="Media">Media</SelectItem>
-                            <SelectItem value="Baja">Baja</SelectItem>
-                          </SelectContent>
-                        </Select>
+                          className="w-20"
+                        />
                       </TableCell>
                       <TableCell>
                         <Input
@@ -289,7 +290,7 @@ export function ProjectsTable() {
                       <TableCell>
                         <div className="flex gap-2">
                           <Button
-                            onClick={() => handleUpdate(proyecto.id)}
+                            onClick={() => handleUpdate(proyecto.notionPageId)}
                             disabled={syncing}
                             size="sm"
                             variant="default"
@@ -308,22 +309,20 @@ export function ProjectsTable() {
                     </>
                   ) : (
                     <>
-                      <TableCell className="font-medium">
-                        {proyecto.codigoProyecto}
+                      <TableCell className="font-medium font-mono">
+                        {formatProjectCode(proyecto.codigoProyecto)}
                       </TableCell>
-                      <TableCell>{proyecto.equipo}</TableCell>
-                      <TableCell>{proyecto.cliente}</TableCell>
-                      <TableCell>{proyecto.personaACargo}</TableCell>
+                      <TableCell>{orSinInformacion(proyecto.equipo)}</TableCell>
+                      <TableCell>{orSinInformacion(proyecto.cliente)}</TableCell>
+                      <TableCell>{orSinInformacion(proyecto.personaACargo)}</TableCell>
                       <TableCell>
                         <span
                           className={`px-2 py-1 rounded text-xs font-semibold ${
-                            proyecto.estado === 'Completado'
+                            proyecto.estado === 'Finalizado'
                               ? 'bg-green-100 text-green-800'
-                              : proyecto.estado === 'En Progreso'
-                              ? 'bg-blue-100 text-blue-800'
-                              : proyecto.estado === 'Pausado'
-                              ? 'bg-yellow-100 text-yellow-800'
-                              : 'bg-gray-100 text-gray-800'
+                              : proyecto.estado === 'Sin empezar'
+                              ? 'bg-gray-100 text-gray-800'
+                              : 'bg-blue-100 text-blue-800'
                           }`}
                         >
                           {proyecto.estado}
@@ -333,16 +332,16 @@ export function ProjectsTable() {
                         <div className="w-16 bg-gray-200 rounded-full h-2">
                           <div
                             className="bg-blue-600 h-2 rounded-full"
-                            style={{ width: `${proyecto.avance}%` }}
+                            style={{ width: `${Math.min(100, Math.max(0, proyecto.avance))}%` }}
                           ></div>
                         </div>
                         <span className="text-xs">{proyecto.avance}%</span>
                       </TableCell>
-                      <TableCell>{proyecto.prioridad}</TableCell>
+                      <TableCell>{orSinInformacion(proyecto.prioridad)}</TableCell>
                       <TableCell>
-                        {new Date(proyecto.fechaEstimadaEntrega).toLocaleDateString(
-                          'es-CO'
-                        )}
+                        {proyecto.fechaEstimadaEntrega
+                          ? new Date(proyecto.fechaEstimadaEntrega).toLocaleDateString('es-CO')
+                          : 'Sin información'}
                       </TableCell>
                       <TableCell>
                         <Button
@@ -360,9 +359,7 @@ export function ProjectsTable() {
             </TableBody>
           </Table>
         </div>
-        <div className="mt-4 text-xs text-gray-500">
-          ✨ Los datos se sincronizan automáticamente cada día. Última actualización: ahora
-        </div>
+        )}
       </CardContent>
     </Card>
   );

@@ -1,18 +1,13 @@
-// src/routes/api/notion/update.ts
-// Endpoint para actualizar un proyecto en Notion
+// src/routes/api/notion/notion-update.ts
+// Endpoint server-side para actualizar un proyecto en Notion.
+// Toda la lógica de qué propiedad de Notion corresponde a cada campo, y con
+// qué tipo (Status, Select, Number, Rich text, Date), vive en el mapper
+// centralizado — este endpoint solo valida la petición y delega en él.
 
-interface UpdateProjectRequest {
-  pageId: string;
-  codigoProyecto?: string;
-  equipo?: string;
-  cliente?: string;
-  personaACargo?: string;
-  fechaInicio?: string;
-  fechaEstimadaEntrega?: string;
-  estado?: string;
-  avance?: number;
-  prioridad?: string;
-  entradaAEstacion?: string;
+import { buildNotionPropertiesPayload, type ProyectoUpdateFields } from '@/lib/notion/mapper';
+
+interface UpdateProjectRequest extends ProyectoUpdateFields {
+  notionPageId: string;
 }
 
 export async function PATCH(req: Request) {
@@ -27,71 +22,28 @@ export async function PATCH(req: Request) {
 
   try {
     const body: UpdateProjectRequest = await req.json();
-    const { pageId, ...updates } = body;
+    const { notionPageId, ...updates } = body;
 
-    if (!pageId) {
+    if (!notionPageId) {
+      // El identificador de la página de Notion es obligatorio: nunca se debe
+      // usar el nombre/código del proyecto para identificar qué actualizar.
       return new Response(
-        JSON.stringify({ error: 'pageId is required' }),
+        JSON.stringify({ error: 'notionPageId is required' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
     }
 
-    // Construye el payload para Notion API
-    const properties: Record<string, any> = {};
+    const properties = buildNotionPropertiesPayload(updates);
 
-    if (updates.codigoProyecto !== undefined) {
-      properties['codigo proyecto'] = {
-        rich_text: [{ text: { content: updates.codigoProyecto } }],
-      };
-    }
-    if (updates.equipo !== undefined) {
-      properties['equipo'] = {
-        rich_text: [{ text: { content: updates.equipo } }],
-      };
-    }
-    if (updates.cliente !== undefined) {
-      properties['cliente'] = {
-        rich_text: [{ text: { content: updates.cliente } }],
-      };
-    }
-    if (updates.personaACargo !== undefined) {
-      properties['persona a cargo'] = {
-        select: { name: updates.personaACargo },
-      };
-    }
-    if (updates.fechaInicio !== undefined) {
-      properties['fecha de inicio'] = {
-        date: { start: updates.fechaInicio },
-      };
-    }
-    if (updates.fechaEstimadaEntrega !== undefined) {
-      properties['fecha estimada de entrega'] = {
-        date: { start: updates.fechaEstimadaEntrega },
-      };
-    }
-    if (updates.estado !== undefined) {
-      properties['estado'] = {
-        select: { name: updates.estado },
-      };
-    }
-    if (updates.avance !== undefined) {
-      properties['avance'] = {
-        number: updates.avance,
-      };
-    }
-    if (updates.prioridad !== undefined) {
-      properties['prioridad'] = {
-        select: { name: updates.prioridad },
-      };
-    }
-    if (updates.entradaAEstacion !== undefined) {
-      properties['entrada a estación'] = {
-        date: { start: updates.entradaAEstacion },
-      };
+    if (Object.keys(properties).length === 0) {
+      return new Response(
+        JSON.stringify({ error: 'No fields to update were provided' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
     }
 
     const response = await fetch(
-      `https://api.notion.com/v1/pages/${pageId}`,
+      `https://api.notion.com/v1/pages/${notionPageId}`,
       {
         method: 'PATCH',
         headers: {
@@ -104,8 +56,8 @@ export async function PATCH(req: Request) {
     );
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(`Notion API error: ${error.message}`);
+      const error = await response.json().catch(() => ({}));
+      throw new Error(`Notion API error: ${error.message ?? response.status}`);
     }
 
     const updated = await response.json();
@@ -114,7 +66,7 @@ export async function PATCH(req: Request) {
       JSON.stringify({
         success: true,
         message: 'Project updated successfully',
-        pageId: updated.id,
+        notionPageId: updated.id,
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );

@@ -7,6 +7,8 @@ import {
   Zap,
   Snowflake,
   Wrench,
+  PenTool,
+  Hourglass,
   CheckCircle2,
   AlertTriangle,
   Clock,
@@ -23,110 +25,73 @@ import {
   User,
   CalendarDays,
   ChevronRight,
+  RefreshCw,
+  Loader2,
 } from "lucide-react";
+import {
+  type Proyecto,
+  type EstadoProyecto,
+  ORDEN_ESTACIONES,
+  TODAS_LAS_COLUMNAS,
+  SIGUIENTE_ESTADO,
+  formatProjectCode,
+  orSinInformacion,
+} from "@/lib/notion/mapper";
 
-// ---------- Tipos ----------
-type Prioridad = "baja" | "media" | "alta" | "urgente";
-type EstacionId =
-  | "corte"
-  | "doblez"
-  | "soldadura"
-  | "pintura"
-  | "electrica"
-  | "refrigeracion"
-  | "ensamblaje";
-type EstadoFinal = "finalizado";
-type Estado = EstacionId | EstadoFinal;
-
+// ---------- Historial (SOLO local de sesión, NO persistido en Notion) ----------
+// Notion no tiene una propiedad que almacene el historial completo de
+// estaciones, solamente "Entrada a estación" (el momento en que el proyecto
+// entró a la estación actual). Por lo tanto este historial se reconstruye
+// únicamente a partir de las transiciones realizadas durante la sesión actual
+// del navegador y se pierde al recargar o sincronizar. No representa datos
+// reales de Notion y nunca debe presentarse como si lo fuera.
 interface HistorialEntry {
-  estacion: EstacionId;
-  inicio: string; // ISO
-  fin: string | null; // ISO
-  operario: string;
-  registradoPor: string;
+  estacion: EstadoProyecto;
+  inicio: string | null; // ISO
+  fin: string; // ISO
+  personaACargo: string;
 }
 
-interface Proyecto {
-  id: string; // PR-2026-001
-  cliente: string;
-  producto: string;
-  prioridad: Prioridad;
-  estado: Estado;
-  operario: string;
-  inicio: string; // ISO
-  entrega: string; // ISO
-  entradaEstacion: string; // ISO -> tiempo transcurrido en estación
-  historial: HistorialEntry[];
-}
-
-const ESTACIONES: {
-  id: EstacionId;
-  label: string;
-  icon: typeof Scissors;
-  color: string;
-}[] = [
-  { id: "corte", label: "Corte", icon: Scissors, color: "var(--stage-cutting)" },
-  { id: "doblez", label: "Doblez", icon: Triangle, color: "var(--stage-bending)" },
-  { id: "soldadura", label: "Soldadura", icon: Flame, color: "var(--stage-welding)" },
-  { id: "pintura", label: "Pintura", icon: SprayCan, color: "var(--stage-painting)" },
-  { id: "electrica", label: "Eléctrica", icon: Zap, color: "var(--stage-electrical)" },
-  { id: "refrigeracion", label: "Refrigeración", icon: Snowflake, color: "var(--stage-refrigeration)" },
-  { id: "ensamblaje", label: "Ensamblaje", icon: Wrench, color: "var(--stage-assembly)" },
-];
-
-const SIGUIENTE: Record<EstacionId, Estado> = {
-  corte: "doblez",
-  doblez: "soldadura",
-  soldadura: "pintura",
-  pintura: "electrica",
-  electrica: "refrigeracion",
-  refrigeracion: "ensamblaje",
-  ensamblaje: "finalizado",
+// ---------- Configuración visual de estaciones ----------
+// El id y el label deben coincidir EXACTAMENTE con el valor de la propiedad
+// Status "Estado" en Notion. Esto es solo configuración de interfaz (iconos,
+// colores, orden); no crea una propiedad "Estación" adicional.
+const ESTACION_CONFIG: Record<
+  EstadoProyecto,
+  { label: string; icon: typeof Scissors; color: string }
+> = {
+  "Sin empezar": { label: "Sin empezar", icon: Hourglass, color: "var(--stage-not-started)" },
+  "Diseño": { label: "Diseño", icon: PenTool, color: "var(--stage-design)" },
+  "Corte": { label: "Corte", icon: Scissors, color: "var(--stage-cutting)" },
+  "Doblez": { label: "Doblez", icon: Triangle, color: "var(--stage-bending)" },
+  "Soldadura": { label: "Soldadura", icon: Flame, color: "var(--stage-welding)" },
+  "Pintura": { label: "Pintura", icon: SprayCan, color: "var(--stage-painting)" },
+  "Ensamblaje": { label: "Ensamblaje", icon: Wrench, color: "var(--stage-assembly)" },
+  "Refrigeración": { label: "Refrigeración", icon: Snowflake, color: "var(--stage-refrigeration)" },
+  "Eléctrica": { label: "Eléctrica", icon: Zap, color: "var(--stage-electrical)" },
+  "Finalizado": { label: "Finalizado", icon: CheckCircle2, color: "oklch(0.55 0.16 150)" },
 };
 
-const OPERARIOS = [
-  "Carlos Ramírez",
-  "María Gómez",
-  "Andrés Ortiz",
-  "Luisa Fernanda",
-  "Diego Torres",
-  "Sandra Peña",
-  "Julián Ríos",
-];
+// Estaciones de producción reales (sin "Sin empezar" ni "Finalizado"), en el
+// orden del flujo productivo. Usadas para la vista "Por estación", el modo TV
+// y los gráficos de planeación.
+const ESTACIONES_PRODUCCION: { id: EstadoProyecto; label: string; icon: typeof Scissors; color: string }[] =
+  ORDEN_ESTACIONES.filter((id) => id !== "Finalizado").map((id) => ({ id, ...ESTACION_CONFIG[id] }));
 
-// ---------- Datos de ejemplo ----------
-const HOY = new Date();
-function iso(offsetDays: number, hours = 0) {
-  const d = new Date(HOY);
-  d.setDate(d.getDate() + offsetDays);
-  d.setHours(d.getHours() + hours);
-  return d.toISOString();
+function estacionConfig(estado: EstadoProyecto) {
+  return ESTACION_CONFIG[estado] ?? { label: estado, icon: Factory, color: "var(--muted-foreground)" };
 }
 
-const PROYECTOS_INICIAL: Proyecto[] = [
-  { id: "PR-2026-001", cliente: "Olímpica", producto: "UMA 10 TR", prioridad: "alta", estado: "corte", operario: "Carlos Ramírez", inicio: iso(-2), entrega: iso(4), entradaEstacion: iso(0, -3), historial: [] },
-  { id: "PR-2026-002", cliente: "Éxito", producto: "Split Inverter 36 000 BTU", prioridad: "media", estado: "corte", operario: "María Gómez", inicio: iso(-1), entrega: iso(5), entradaEstacion: iso(0, -1), historial: [] },
-  { id: "PR-2026-003", cliente: "Carulla", producto: "Chiller 40 TR", prioridad: "urgente", estado: "doblez", operario: "Andrés Ortiz", inicio: iso(-3), entrega: iso(1), entradaEstacion: iso(0, -5), historial: [] },
-  { id: "PR-2026-004", cliente: "Alkosto", producto: "UMA 15 TR", prioridad: "media", estado: "doblez", operario: "Luisa Fernanda", inicio: iso(-2), entrega: iso(6), entradaEstacion: iso(0, -2), historial: [] },
-  { id: "PR-2026-005", cliente: "D1", producto: "Cuarto Frío 20 m³", prioridad: "alta", estado: "soldadura", operario: "Diego Torres", inicio: iso(-4), entrega: iso(3), entradaEstacion: iso(0, -6), historial: [] },
-  { id: "PR-2026-006", cliente: "Jumbo", producto: "Vitrina Refrigerada VR-8", prioridad: "baja", estado: "soldadura", operario: "Sandra Peña", inicio: iso(-3), entrega: iso(7), entradaEstacion: iso(0, -2), historial: [] },
-  { id: "PR-2026-007", cliente: "Ara", producto: "Congelador Industrial 800L", prioridad: "media", estado: "pintura", operario: "Julián Ríos", inicio: iso(-5), entrega: iso(2), entradaEstacion: iso(0, -4), historial: [] },
-  { id: "PR-2026-008", cliente: "Olímpica", producto: "UMA 20 TR", prioridad: "urgente", estado: "pintura", operario: "Carlos Ramírez", inicio: iso(-6), entrega: iso(-1), entradaEstacion: iso(0, -8), historial: [] },
-  { id: "PR-2026-009", cliente: "Éxito", producto: "Chiller Enfriado por Aire 60 TR", prioridad: "alta", estado: "electrica", operario: "María Gómez", inicio: iso(-4), entrega: iso(2), entradaEstacion: iso(0, -3), historial: [] },
-  { id: "PR-2026-010", cliente: "Alkosto", producto: "Cámara de Congelación 30 m³", prioridad: "media", estado: "refrigeracion", operario: "Andrés Ortiz", inicio: iso(-7), entrega: iso(1), entradaEstacion: iso(0, -5), historial: [] },
-  { id: "PR-2026-011", cliente: "Carulla", producto: "Vitrina Panorámica VP-4", prioridad: "baja", estado: "refrigeracion", operario: "Luisa Fernanda", inicio: iso(-6), entrega: iso(3), entradaEstacion: iso(0, -1), historial: [] },
-  { id: "PR-2026-012", cliente: "Jumbo", producto: "Isla de Congelación 3m", prioridad: "alta", estado: "ensamblaje", operario: "Diego Torres", inicio: iso(-8), entrega: iso(1), entradaEstacion: iso(0, -6), historial: [] },
-  { id: "PR-2026-013", cliente: "D1", producto: "Cava de Vinos 200 bot", prioridad: "media", estado: "ensamblaje", operario: "Sandra Peña", inicio: iso(-9), entrega: iso(0), entradaEstacion: iso(0, -4), historial: [] },
-  { id: "PR-2026-014", cliente: "Ara", producto: "UMA 5 TR", prioridad: "urgente", estado: "corte", operario: "Julián Ríos", inicio: iso(0), entrega: iso(-1), entradaEstacion: iso(0, -1), historial: [] },
-];
-
 // ---------- Helpers ----------
-const fmtDate = (s: string) =>
-  new Date(s).toLocaleDateString("es-CO", { day: "2-digit", month: "short", year: "numeric" });
-const fmtDateTime = (s: string) =>
-  new Date(s).toLocaleString("es-CO", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+const fmtDate = (s: string | null) =>
+  s ? new Date(s).toLocaleDateString("es-CO", { day: "2-digit", month: "short", year: "numeric" }) : "Sin información";
+const fmtDateTime = (s: string | null) =>
+  s
+    ? new Date(s).toLocaleString("es-CO", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
+    : "Sin información";
 
-function elapsedText(fromISO: string, toISO?: string) {
+function elapsedText(fromISO: string | null, toISO?: string) {
+  if (!fromISO) return "Sin información";
   const from = new Date(fromISO).getTime();
   const to = toISO ? new Date(toISO).getTime() : Date.now();
   const mins = Math.max(0, Math.round((to - from) / 60000));
@@ -137,24 +102,28 @@ function elapsedText(fromISO: string, toISO?: string) {
 }
 
 function isDelayed(p: Proyecto) {
-  return p.estado !== "finalizado" && new Date(p.entrega).getTime() < Date.now();
+  return p.estado !== "Finalizado" && !!p.fechaEstimadaEntrega && new Date(p.fechaEstimadaEntrega).getTime() < Date.now();
 }
 
+// El Avance es un valor real de Notion (Number). No se recalcula ni se
+// inventa: solo se acota a un rango visualizable de 0-100 para la barra.
 function progressPct(p: Proyecto) {
-  if (p.estado === "finalizado") return 100;
-  const idx = ESTACIONES.findIndex((e) => e.id === p.estado);
-  return Math.round(((idx + 0.5) / ESTACIONES.length) * 100);
+  return Math.min(100, Math.max(0, Math.round(p.avance)));
 }
 
-const PRIORIDAD_STYLE: Record<Prioridad, { bg: string; text: string; label: string; dot: string }> = {
-  baja: { bg: "bg-slate-100", text: "text-slate-700", label: "Baja", dot: "bg-slate-400" },
-  media: { bg: "bg-blue-100", text: "text-blue-700", label: "Media", dot: "bg-blue-500" },
-  alta: { bg: "bg-amber-100", text: "text-amber-800", label: "Alta", dot: "bg-amber-500" },
-  urgente: { bg: "bg-red-100", text: "text-red-700", label: "Urgente", dot: "bg-red-600" },
-};
+// Estilo visual según el texto real de Prioridad en Notion. No se inventan
+// valores de prioridad; el label mostrado siempre es el valor real de Notion.
+function prioridadStyle(raw: string) {
+  const key = raw.trim().toLowerCase();
+  if (key.includes("urgente")) return { bg: "bg-red-100", text: "text-red-700", dot: "bg-red-600" };
+  if (key.includes("alta")) return { bg: "bg-amber-100", text: "text-amber-800", dot: "bg-amber-500" };
+  if (key.includes("media")) return { bg: "bg-blue-100", text: "text-blue-700", dot: "bg-blue-500" };
+  if (key.includes("baja")) return { bg: "bg-slate-100", text: "text-slate-700", dot: "bg-slate-400" };
+  return { bg: "bg-slate-100", text: "text-slate-700", dot: "bg-slate-400" };
+}
 
-function PrioridadBadge({ p, size = "sm" }: { p: Prioridad; size?: "sm" | "lg" }) {
-  const s = PRIORIDAD_STYLE[p];
+function PrioridadBadge({ prioridad, size = "sm" }: { prioridad: string; size?: "sm" | "lg" }) {
+  const s = prioridadStyle(prioridad);
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full font-semibold ${s.bg} ${s.text} ${
@@ -162,7 +131,7 @@ function PrioridadBadge({ p, size = "sm" }: { p: Prioridad; size?: "sm" | "lg" }
       }`}
     >
       <span className={`h-2 w-2 rounded-full ${s.dot}`} />
-      {s.label}
+      {orSinInformacion(prioridad)}
     </span>
   );
 }
@@ -183,16 +152,20 @@ function ProyectoCard({
   p,
   onCompletar,
   onHistorial,
+  updating = false,
   tv = false,
 }: {
   p: Proyecto;
   onCompletar: (p: Proyecto) => void;
   onHistorial: (p: Proyecto) => void;
+  updating?: boolean;
   tv?: boolean;
 }) {
   const delayed = isDelayed(p);
   const pct = progressPct(p);
-  const estStyle = ESTACIONES.find((e) => e.id === p.estado);
+  const estStyle = estacionConfig(p.estado);
+  const siguienteDisponible = SIGUIENTE_ESTADO[p.estado] !== null;
+  const codigo = formatProjectCode(p.codigoProyecto);
 
   return (
     <article
@@ -214,34 +187,34 @@ function ProyectoCard({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className={`font-mono font-semibold text-muted-foreground ${tv ? "text-sm" : "text-xs"}`}>
-            {p.id}
+            {codigo}
           </div>
           <div className={`mt-0.5 truncate font-bold text-foreground ${tv ? "text-2xl" : "text-lg"}`}>
-            {p.producto}
+            {orSinInformacion(p.equipo)}
           </div>
           <div className={`truncate text-muted-foreground ${tv ? "text-base" : "text-sm"}`}>
-            Cliente: <span className="font-semibold text-foreground">{p.cliente}</span>
+            Cliente: <span className="font-semibold text-foreground">{orSinInformacion(p.cliente)}</span>
           </div>
         </div>
-        <PrioridadBadge p={p.prioridad} size={tv ? "lg" : "sm"} />
+        <PrioridadBadge prioridad={p.prioridad} size={tv ? "lg" : "sm"} />
       </div>
 
       <div className={`mt-3 grid grid-cols-2 gap-2 ${tv ? "text-base" : "text-sm"}`}>
         <div className="flex items-center gap-1.5 text-muted-foreground">
           <User className={`shrink-0 ${tv ? "h-5 w-5" : "h-4 w-4"}`} />
-          <span className="truncate font-medium text-foreground">{p.operario}</span>
+          <span className="truncate font-medium text-foreground">{orSinInformacion(p.personaACargo)}</span>
         </div>
         <div className="flex items-center gap-1.5 text-muted-foreground">
           <Clock className={`shrink-0 ${tv ? "h-5 w-5" : "h-4 w-4"}`} />
-          <span className="truncate">En estación: {elapsedText(p.entradaEstacion)}</span>
+          <span className="truncate">En estación: {elapsedText(p.entradaAEstacion)}</span>
         </div>
         <div className="flex items-center gap-1.5 text-muted-foreground">
           <CalendarDays className={`shrink-0 ${tv ? "h-5 w-5" : "h-4 w-4"}`} />
-          <span className="truncate">Inicio: {fmtDate(p.inicio)}</span>
+          <span className="truncate">Inicio: {fmtDate(p.fechaInicio)}</span>
         </div>
         <div className={`flex items-center gap-1.5 ${delayed ? "text-red-600 font-semibold" : "text-muted-foreground"}`}>
           <CalendarDays className={`shrink-0 ${tv ? "h-5 w-5" : "h-4 w-4"}`} />
-          <span className="truncate">Entrega: {fmtDate(p.entrega)}</span>
+          <span className="truncate">Entrega: {fmtDate(p.fechaEstimadaEntrega)}</span>
         </div>
       </div>
 
@@ -251,7 +224,7 @@ function ProyectoCard({
             Avance
           </span>
           <span className={`font-bold tabular-nums text-foreground ${tv ? "text-base" : "text-sm"}`}>
-            {pct}%
+            {p.avance}%
           </span>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-secondary">
@@ -259,22 +232,38 @@ function ProyectoCard({
             className="h-full rounded-full transition-all duration-500"
             style={{
               width: `${pct}%`,
-              background: `linear-gradient(90deg, var(--primary), ${estStyle?.color ?? "var(--primary)"})`,
+              background: `linear-gradient(90deg, var(--primary), ${estStyle.color})`,
             }}
           />
         </div>
       </div>
 
       <div className={`mt-4 flex gap-2 ${tv ? "flex-col" : ""}`}>
-        <button
-          onClick={() => onCompletar(p)}
-          className={`flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary font-bold text-primary-foreground transition-all active:scale-[0.98] hover:opacity-90 ${
-            tv ? "py-5 text-xl" : "py-3 text-sm"
-          }`}
-        >
-          <CheckCircle2 className={tv ? "h-6 w-6" : "h-4 w-4"} />
-          Completar tarea
-        </button>
+        {siguienteDisponible ? (
+          <button
+            onClick={() => onCompletar(p)}
+            disabled={updating}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary font-bold text-primary-foreground transition-all active:scale-[0.98] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 ${
+              tv ? "py-5 text-xl" : "py-3 text-sm"
+            }`}
+          >
+            {updating ? (
+              <Loader2 className={`animate-spin ${tv ? "h-6 w-6" : "h-4 w-4"}`} />
+            ) : (
+              <CheckCircle2 className={tv ? "h-6 w-6" : "h-4 w-4"} />
+            )}
+            {updating ? "Actualizando…" : "Completar tarea"}
+          </button>
+        ) : (
+          <div
+            className={`flex flex-1 items-center justify-center gap-2 rounded-xl bg-secondary font-bold text-muted-foreground ${
+              tv ? "py-5 text-xl" : "py-3 text-sm"
+            }`}
+          >
+            <CheckCircle2 className={tv ? "h-6 w-6" : "h-4 w-4"} />
+            Finalizado
+          </div>
+        )}
         {!tv && (
           <button
             onClick={() => onHistorial(p)}
@@ -295,22 +284,25 @@ function KanbanColumn({
   proyectos,
   onCompletar,
   onHistorial,
+  updatingId,
 }: {
-  estacion: (typeof ESTACIONES)[number];
+  estacion: { id: EstadoProyecto; label: string; icon: typeof Scissors; color: string };
   proyectos: Proyecto[];
   onCompletar: (p: Proyecto) => void;
   onHistorial: (p: Proyecto) => void;
+  updatingId: string | null;
 }) {
   const Icon = estacion.icon;
   const activos = proyectos.length;
+  const conTiempo = proyectos.filter((p) => !!p.entradaAEstacion);
   const avgMin =
-    activos > 0
+    conTiempo.length > 0
       ? Math.round(
-          proyectos.reduce((acc, p) => acc + (Date.now() - new Date(p.entradaEstacion).getTime()) / 60000, 0) /
-            activos,
+          conTiempo.reduce((acc, p) => acc + (Date.now() - new Date(p.entradaAEstacion as string).getTime()) / 60000, 0) /
+            conTiempo.length,
         )
       : 0;
-  const avgTxt = avgMin >= 60 ? `${Math.floor(avgMin / 60)}h ${avgMin % 60}m` : `${avgMin}m`;
+  const avgTxt = conTiempo.length === 0 ? "Sin información" : avgMin >= 60 ? `${Math.floor(avgMin / 60)}h ${avgMin % 60}m` : `${avgMin}m`;
   const bottleneck = activos >= 3;
 
   return (
@@ -356,7 +348,13 @@ function KanbanColumn({
           </div>
         ) : (
           proyectos.map((p) => (
-            <ProyectoCard key={p.id} p={p} onCompletar={onCompletar} onHistorial={onHistorial} />
+            <ProyectoCard
+              key={p.id}
+              p={p}
+              onCompletar={onCompletar}
+              onHistorial={onHistorial}
+              updating={updatingId === p.notionPageId}
+            />
           ))
         )}
       </div>
@@ -369,15 +367,16 @@ function ConfirmModal({
   proyecto,
   onConfirm,
   onCancel,
+  submitting,
 }: {
   proyecto: Proyecto | null;
   onConfirm: () => void;
   onCancel: () => void;
+  submitting: boolean;
 }) {
   if (!proyecto) return null;
-  const siguiente = SIGUIENTE[proyecto.estado as EstacionId];
-  const siguienteLabel =
-    siguiente === "finalizado" ? "Proyecto finalizado" : ESTACIONES.find((e) => e.id === siguiente)?.label;
+  const siguiente = SIGUIENTE_ESTADO[proyecto.estado];
+  const siguienteLabel = siguiente ? estacionConfig(siguiente).label : "—";
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4 backdrop-blur-sm">
       <div className="w-full max-w-md rounded-3xl bg-card p-6 shadow-2xl">
@@ -388,9 +387,9 @@ function ConfirmModal({
           ¿Está seguro de que desea finalizar esta tarea?
         </h3>
         <div className="mt-4 rounded-xl border border-border bg-secondary/50 p-3 text-sm">
-          <div className="font-mono text-muted-foreground">{proyecto.id}</div>
-          <div className="font-bold text-foreground">{proyecto.producto}</div>
-          <div className="text-muted-foreground">Cliente: {proyecto.cliente}</div>
+          <div className="font-mono text-muted-foreground">{formatProjectCode(proyecto.codigoProyecto)}</div>
+          <div className="font-bold text-foreground">{orSinInformacion(proyecto.equipo)}</div>
+          <div className="text-muted-foreground">Cliente: {orSinInformacion(proyecto.cliente)}</div>
           <div className="mt-2 flex items-center gap-2 text-foreground">
             <span className="text-muted-foreground">Pasará a:</span>
             <span className="inline-flex items-center gap-1 font-bold">
@@ -402,15 +401,18 @@ function ConfirmModal({
         <div className="mt-6 flex gap-3">
           <button
             onClick={onCancel}
-            className="flex-1 rounded-xl border border-border bg-card py-3 font-bold text-foreground hover:bg-secondary"
+            disabled={submitting}
+            className="flex-1 rounded-xl border border-border bg-card py-3 font-bold text-foreground hover:bg-secondary disabled:opacity-60"
           >
             Cancelar
           </button>
           <button
             onClick={onConfirm}
-            className="flex-1 rounded-xl bg-primary py-3 font-bold text-primary-foreground hover:opacity-90"
+            disabled={submitting}
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary py-3 font-bold text-primary-foreground hover:opacity-90 disabled:opacity-60"
           >
-            Confirmar
+            {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+            {submitting ? "Actualizando Notion…" : "Confirmar"}
           </button>
         </div>
       </div>
@@ -420,9 +422,11 @@ function ConfirmModal({
 
 function HistorialModal({
   proyecto,
+  historial,
   onClose,
 }: {
   proyecto: Proyecto | null;
+  historial: HistorialEntry[];
   onClose: () => void;
 }) {
   if (!proyecto) return null;
@@ -432,11 +436,13 @@ function HistorialModal({
         <div className="mb-4 flex items-start justify-between">
           <div>
             <div className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
-              Historial del proyecto
+              Historial del proyecto (solo esta sesión)
             </div>
-            <h3 className="mt-1 font-mono text-lg font-bold text-foreground">{proyecto.id}</h3>
+            <h3 className="mt-1 font-mono text-lg font-bold text-foreground">
+              {formatProjectCode(proyecto.codigoProyecto)}
+            </h3>
             <div className="text-sm text-muted-foreground">
-              {proyecto.producto} · {proyecto.cliente}
+              {orSinInformacion(proyecto.equipo)} · {orSinInformacion(proyecto.cliente)}
             </div>
           </div>
           <button
@@ -448,31 +454,36 @@ function HistorialModal({
           </button>
         </div>
 
-        {proyecto.historial.length === 0 ? (
+        <div className="mb-4 rounded-xl border border-dashed border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+          Notion solo almacena la estación actual ("Estado") y el momento en que el
+          proyecto entró a ella ("Entrada a estación"). Este historial completo se
+          reconstruye localmente durante esta sesión y no queda guardado en Notion.
+        </div>
+
+        {historial.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-            Aún no hay eventos registrados para este proyecto.
+            Aún no hay eventos registrados en esta sesión para este proyecto.
           </div>
         ) : (
           <ol className="relative space-y-4 border-l-2 border-border pl-5">
-            {proyecto.historial.map((h, i) => {
-              const est = ESTACIONES.find((e) => e.id === h.estacion);
-              const Icon = est?.icon ?? Factory;
+            {historial.map((h, i) => {
+              const est = estacionConfig(h.estacion);
+              const Icon = est.icon;
               return (
                 <li key={i} className="relative">
                   <span
                     className="absolute -left-[30px] grid h-7 w-7 place-items-center rounded-full text-white ring-4 ring-background"
-                    style={{ backgroundColor: est?.color ?? "var(--primary)" }}
+                    style={{ backgroundColor: est.color }}
                   >
                     <Icon className="h-4 w-4" />
                   </span>
                   <div className="rounded-xl bg-secondary/60 p-3">
-                    <div className="font-bold text-foreground">{est?.label}</div>
+                    <div className="font-bold text-foreground">{est.label}</div>
                     <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
                       <div>Inicio: <span className="text-foreground">{fmtDateTime(h.inicio)}</span></div>
-                      <div>Fin: <span className="text-foreground">{h.fin ? fmtDateTime(h.fin) : "—"}</span></div>
-                      <div>Tiempo: <span className="text-foreground">{h.fin ? elapsedText(h.inicio, h.fin) : "—"}</span></div>
-                      <div>Operario: <span className="text-foreground">{h.operario}</span></div>
-                      <div className="col-span-2">Registrado por: <span className="text-foreground">{h.registradoPor}</span></div>
+                      <div>Fin: <span className="text-foreground">{fmtDateTime(h.fin)}</span></div>
+                      <div>Tiempo: <span className="text-foreground">{h.inicio ? elapsedText(h.inicio, h.fin) : "Sin información"}</span></div>
+                      <div className="col-span-2">Persona a cargo: <span className="text-foreground">{orSinInformacion(h.personaACargo)}</span></div>
                     </div>
                   </div>
                 </li>
@@ -491,11 +502,13 @@ function UndoToast({
   msg,
   onUndo,
   onDismiss,
+  undoing,
 }: {
   visible: boolean;
   msg: string;
   onUndo: () => void;
   onDismiss: () => void;
+  undoing: boolean;
 }) {
   if (!visible) return null;
   return (
@@ -505,9 +518,10 @@ function UndoToast({
         <span className="text-sm font-semibold">{msg}</span>
         <button
           onClick={onUndo}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-background/10 px-3 py-1.5 text-sm font-bold hover:bg-background/20"
+          disabled={undoing}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-background/10 px-3 py-1.5 text-sm font-bold hover:bg-background/20 disabled:opacity-60"
         >
-          <Undo2 className="h-4 w-4" />
+          {undoing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Undo2 className="h-4 w-4" />}
           Deshacer
         </button>
         <button onClick={onDismiss} className="rounded p-1 hover:bg-background/10" aria-label="Cerrar">
@@ -518,47 +532,64 @@ function UndoToast({
   );
 }
 
+// ---------- Toast de error de acción ----------
+function ActionErrorToast({ msg, onDismiss }: { msg: string | null; onDismiss: () => void }) {
+  if (!msg) return null;
+  return (
+    <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
+      <div className="flex items-center gap-4 rounded-2xl bg-red-600 px-5 py-3 text-white shadow-2xl">
+        <AlertTriangle className="h-5 w-5" />
+        <span className="text-sm font-semibold">{msg}</span>
+        <button onClick={onDismiss} className="rounded p-1 hover:bg-white/10" aria-label="Cerrar">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ---------- Vista Planeación ----------
 function PlaneacionView({ proyectos }: { proyectos: Proyecto[] }) {
-  const activos = proyectos.filter((p) => p.estado !== "finalizado");
+  const activos = proyectos.filter((p) => p.estado !== "Finalizado");
   const finalizadosHoy = proyectos.filter((p) => {
-    if (p.estado !== "finalizado") return false;
-    const last = p.historial[p.historial.length - 1];
-    if (!last?.fin) return false;
-    const d = new Date(last.fin);
+    if (p.estado !== "Finalizado" || !p.entradaAEstacion) return false;
+    const d = new Date(p.entradaAEstacion);
     return d.toDateString() === new Date().toDateString();
   });
   const retrasados = activos.filter(isDelayed);
-  const porEstacion = ESTACIONES.map((e) => ({
+  const porEstacion = ESTACIONES_PRODUCCION.map((e) => ({
     ...e,
     count: activos.filter((p) => p.estado === e.id).length,
   }));
   const maxCarga = porEstacion.reduce((a, b) => (b.count > a.count ? b : a), porEstacion[0]);
   const maxBar = Math.max(1, ...porEstacion.map((e) => e.count));
 
-  const tiemposEstacion = ESTACIONES.map((e) => {
+  const tiemposEstacion = ESTACIONES_PRODUCCION.map((e) => {
     const times = activos
-      .filter((p) => p.estado === e.id)
-      .map((p) => (Date.now() - new Date(p.entradaEstacion).getTime()) / 3600000);
+      .filter((p) => p.estado === e.id && !!p.entradaAEstacion)
+      .map((p) => (Date.now() - new Date(p.entradaAEstacion as string).getTime()) / 3600000);
     const avg = times.length ? times.reduce((a, b) => a + b, 0) / times.length : 0;
     return { ...e, avgH: Math.round(avg * 10) / 10 };
   });
-  const tiempoTotalProm =
-    tiemposEstacion.reduce((a, b) => a + b.avgH, 0);
+  const tiempoTotalProm = tiemposEstacion.reduce((a, b) => a + b.avgH, 0);
 
-  // pie chart data (prioridades)
-  const prio = (["urgente", "alta", "media", "baja"] as Prioridad[]).map((p) => ({
-    label: PRIORIDAD_STYLE[p].label,
-    value: activos.filter((x) => x.prioridad === p).length,
-    color: PRIORIDAD_STYLE[p].dot.replace("bg-", ""),
-    dotClass: PRIORIDAD_STYLE[p].dot,
+  // Distribución de prioridades reales (sin inventar categorías fijas)
+  const prioridadesUnicas = Array.from(
+    new Set(activos.map((p) => p.prioridad).filter((v) => v && v.trim().length > 0)),
+  );
+  const paletaColores = ["#dc2626", "#f59e0b", "#3b82f6", "#94a3b8", "#10b981", "#8b5cf6", "#ec4899", "#14b8a6"];
+  const prio = prioridadesUnicas.map((label, i) => ({
+    label,
+    value: activos.filter((x) => x.prioridad === label).length,
+    dotClass: prioridadStyle(label).dot,
+    color: paletaColores[i % paletaColores.length],
   }));
-  const total = prio.reduce((a, b) => a + b.value, 0) || 1;
+  const total = prio.reduce((a, b) => a + b.value, 0);
   let acc = 0;
   const arcs = prio.map((p) => {
-    const start = acc / total;
+    const start = acc / (total || 1);
     acc += p.value;
-    const end = acc / total;
+    const end = acc / (total || 1);
     return { ...p, start, end };
   });
 
@@ -570,9 +601,9 @@ function PlaneacionView({ proyectos }: { proyectos: Proyecto[] }) {
         <Kpi label="Proyectos retrasados" value={retrasados.length} accent="oklch(0.6 0.22 27)" />
         <Kpi
           label="Estación con mayor carga"
-          value={maxCarga.count}
-          accent={maxCarga.color}
-          hint={maxCarga.label}
+          value={maxCarga?.count ?? 0}
+          accent={maxCarga?.color ?? "var(--primary)"}
+          hint={maxCarga?.label}
         />
       </div>
 
@@ -606,45 +637,50 @@ function PlaneacionView({ proyectos }: { proyectos: Proyecto[] }) {
         <div className="rounded-3xl border border-border bg-card p-5" style={{ boxShadow: "var(--shadow-card)" }}>
           <h3 className="text-lg font-black text-foreground">Prioridades</h3>
           <p className="text-xs text-muted-foreground">Distribución de proyectos activos</p>
-          <div className="mt-4 flex items-center gap-6">
-            <svg viewBox="0 0 42 42" className="h-40 w-40">
-              <circle cx="21" cy="21" r="15.915" fill="none" stroke="var(--secondary)" strokeWidth="6" />
-              {arcs.map((a, i) => {
-                const dash = (a.end - a.start) * 100;
-                const offset = 25 - a.start * 100;
-                const colors = ["#dc2626", "#f59e0b", "#3b82f6", "#94a3b8"];
-                return (
-                  <circle
-                    key={i}
-                    cx="21"
-                    cy="21"
-                    r="15.915"
-                    fill="none"
-                    stroke={colors[i]}
-                    strokeWidth="6"
-                    strokeDasharray={`${dash} ${100 - dash}`}
-                    strokeDashoffset={offset}
-                    transform="rotate(-90 21 21)"
-                  />
-                );
-              })}
-              <text x="21" y="22" textAnchor="middle" fontSize="6" fontWeight="800" fill="currentColor">
-                {activos.length}
-              </text>
-              <text x="21" y="27" textAnchor="middle" fontSize="2.5" fill="currentColor" opacity="0.6">
-                activos
-              </text>
-            </svg>
-            <ul className="space-y-2 text-sm">
-              {prio.map((p) => (
-                <li key={p.label} className="flex items-center gap-2">
-                  <span className={`h-3 w-3 rounded-full ${p.dotClass}`} />
-                  <span className="font-semibold text-foreground">{p.label}</span>
-                  <span className="text-muted-foreground">· {p.value}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
+          {total === 0 ? (
+            <div className="mt-6 grid h-40 place-items-center text-sm text-muted-foreground">
+              Sin datos de prioridad
+            </div>
+          ) : (
+            <div className="mt-4 flex items-center gap-6">
+              <svg viewBox="0 0 42 42" className="h-40 w-40">
+                <circle cx="21" cy="21" r="15.915" fill="none" stroke="var(--secondary)" strokeWidth="6" />
+                {arcs.map((a, i) => {
+                  const dash = (a.end - a.start) * 100;
+                  const offset = 25 - a.start * 100;
+                  return (
+                    <circle
+                      key={i}
+                      cx="21"
+                      cy="21"
+                      r="15.915"
+                      fill="none"
+                      stroke={a.color}
+                      strokeWidth="6"
+                      strokeDasharray={`${dash} ${100 - dash}`}
+                      strokeDashoffset={offset}
+                      transform="rotate(-90 21 21)"
+                    />
+                  );
+                })}
+                <text x="21" y="22" textAnchor="middle" fontSize="6" fontWeight="800" fill="currentColor">
+                  {activos.length}
+                </text>
+                <text x="21" y="27" textAnchor="middle" fontSize="2.5" fill="currentColor" opacity="0.6">
+                  activos
+                </text>
+              </svg>
+              <ul className="space-y-2 text-sm">
+                {prio.map((p) => (
+                  <li key={p.label} className="flex items-center gap-2">
+                    <span className={`h-3 w-3 rounded-full ${p.dotClass}`} />
+                    <span className="font-semibold text-foreground">{p.label}</span>
+                    <span className="text-muted-foreground">· {p.value}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
 
@@ -711,25 +747,99 @@ function Kpi({
   );
 }
 
+// ---------- Pantallas de carga / error / vacío ----------
+function LoadingScreen() {
+  return (
+    <div className="grid min-h-screen place-items-center bg-background">
+      <div className="flex flex-col items-center gap-3 text-muted-foreground">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <span className="text-lg font-semibold">Cargando proyectos...</span>
+      </div>
+    </div>
+  );
+}
+
+function ErrorScreen({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="grid min-h-screen place-items-center bg-background p-6">
+      <div className="flex max-w-md flex-col items-center gap-4 rounded-3xl border border-border bg-card p-8 text-center" style={{ boxShadow: "var(--shadow-card)" }}>
+        <AlertTriangle className="h-10 w-10 text-red-600" />
+        <h2 className="text-xl font-black text-foreground">No se pudieron cargar los proyectos.</h2>
+        <p className="text-sm text-muted-foreground">
+          Revisa la conexión con Notion e inténtalo de nuevo.
+        </p>
+        <button
+          onClick={onRetry}
+          className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground hover:opacity-90"
+        >
+          <RefreshCw className="h-4 w-4" />
+          Reintentar
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ---------- App principal ----------
 type Vista = "general" | "estacion" | "planeacion";
 
 export function FrozzMes() {
-  const [proyectos, setProyectos] = useState<Proyecto[]>(PROYECTOS_INICIAL);
+  const [proyectos, setProyectos] = useState<Proyecto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+
+  // Historial local de sesión: notionPageId -> eventos. NO viene de Notion.
+  const [historialLocal, setHistorialLocal] = useState<Record<string, HistorialEntry[]>>({});
+
   const [vista, setVista] = useState<Vista>("general");
-  const [estacionSel, setEstacionSel] = useState<EstacionId>("corte");
+  const [estacionSel, setEstacionSel] = useState<EstadoProyecto>("Diseño");
   const [prioridad, setPrioridad] = useState<string>("all");
-  const [operario, setOperario] = useState<string>("all");
+  const [persona, setPersona] = useState<string>("all");
   const [estadoFiltro, setEstadoFiltro] = useState<string>("all");
   const [query, setQuery] = useState("");
   const [tvMode, setTvMode] = useState(false);
   const [confirmProyecto, setConfirmProyecto] = useState<Proyecto | null>(null);
   const [historialProyecto, setHistorialProyecto] = useState<Proyecto | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [undoing, setUndoing] = useState(false);
   const [undoState, setUndoState] = useState<{
-    prev: Proyecto[];
+    notionPageId: string;
+    prevEstado: EstadoProyecto;
+    prevEntradaAEstacion: string | null;
     msg: string;
     at: number;
   } | null>(null);
+
+  // ---------- Notion → Web ----------
+  const fetchProyectos = async () => {
+    try {
+      setLoadError(null);
+      const res = await fetch("/api/notion/read");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.message || "Failed to fetch projects");
+      }
+      const data = await res.json();
+      setProyectos(data.proyectos ?? []);
+    } catch (err: any) {
+      setLoadError(err?.message ?? "Error desconocido");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchProyectos();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    await fetchProyectos();
+    setSyncing(false);
+  };
 
   const now = useNow(1000);
   const [tvTick, setTvTick] = useState(0);
@@ -738,7 +848,6 @@ export function FrozzMes() {
     const id = setInterval(() => setTvTick((t) => t + 1), 30000);
     return () => clearInterval(id);
   }, [tvMode]);
-  // ensure tvTick is referenced (prevents dead-code warnings)
   void tvTick;
 
   // Auto-hide undo after 5 min
@@ -748,63 +857,138 @@ export function FrozzMes() {
     return () => clearTimeout(id);
   }, [undoState]);
 
+  // Auto-hide error toast
+  useEffect(() => {
+    if (!actionError) return;
+    const id = setTimeout(() => setActionError(null), 6000);
+    return () => clearTimeout(id);
+  }, [actionError]);
+
+  // Filtros derivados de los datos reales recibidos de Notion (nunca listas ficticias)
+  const personasDisponibles = useMemo(
+    () => Array.from(new Set(proyectos.map((p) => p.personaACargo).filter((v) => v && v.trim().length > 0))).sort(),
+    [proyectos],
+  );
+  const prioridadesDisponibles = useMemo(
+    () => Array.from(new Set(proyectos.map((p) => p.prioridad).filter((v) => v && v.trim().length > 0))).sort(),
+    [proyectos],
+  );
+
   const filtrados = useMemo(() => {
     return proyectos.filter((p) => {
       if (prioridad !== "all" && p.prioridad !== prioridad) return false;
-      if (operario !== "all" && p.operario !== operario) return false;
+      if (persona !== "all" && p.personaACargo !== persona) return false;
       if (estadoFiltro !== "all" && p.estado !== estadoFiltro) return false;
       if (query) {
         const q = query.toLowerCase();
+        const codigo = formatProjectCode(p.codigoProyecto).toLowerCase();
         if (
-          !p.id.toLowerCase().includes(q) &&
+          !codigo.includes(q) &&
           !p.cliente.toLowerCase().includes(q) &&
-          !p.producto.toLowerCase().includes(q)
+          !p.equipo.toLowerCase().includes(q)
         )
           return false;
       }
       return true;
     });
-  }, [proyectos, prioridad, operario, estadoFiltro, query]);
+  }, [proyectos, prioridad, persona, estadoFiltro, query]);
 
   const handleCompletarClick = (p: Proyecto) => setConfirmProyecto(p);
 
-  const doCompletar = () => {
+  // ---------- Web → Notion ----------
+  const doCompletar = async () => {
     if (!confirmProyecto) return;
-    const prev = proyectos;
     const p = confirmProyecto;
+    const siguiente = SIGUIENTE_ESTADO[p.estado];
+    if (!siguiente) {
+      setConfirmProyecto(null);
+      return;
+    }
     const ahora = new Date().toISOString();
-    const siguiente = SIGUIENTE[p.estado as EstacionId];
-    const nuevo: Proyecto = {
-      ...p,
-      estado: siguiente,
-      entradaEstacion: siguiente === "finalizado" ? p.entradaEstacion : ahora,
-      historial: [
-        ...p.historial,
-        {
-          estacion: p.estado as EstacionId,
-          inicio: p.entradaEstacion,
-          fin: ahora,
-          operario: p.operario,
-          registradoPor: p.operario,
-        },
-      ],
-    };
-    setProyectos(proyectos.map((x) => (x.id === p.id ? nuevo : x)));
-    setUndoState({
-      prev,
-      msg:
-        siguiente === "finalizado"
-          ? `${p.id} finalizado correctamente.`
-          : `Tarea completada. ${p.id} pasó a ${ESTACIONES.find((e) => e.id === siguiente)?.label}.`,
-      at: Date.now(),
-    });
-    setConfirmProyecto(null);
+    const prevEstado = p.estado;
+    const prevEntradaAEstacion = p.entradaAEstacion;
+
+    setUpdatingId(p.notionPageId);
+    try {
+      const res = await fetch("/api/notion/update", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          notionPageId: p.notionPageId,
+          estado: siguiente,
+          entradaAEstacion: ahora,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.message || "Failed to update project");
+      }
+
+      // Solo se considera exitosa la actualización una vez Notion confirma.
+      setProyectos((prev) =>
+        prev.map((x) =>
+          x.notionPageId === p.notionPageId ? { ...x, estado: siguiente, entradaAEstacion: ahora } : x,
+        ),
+      );
+      setHistorialLocal((prev) => ({
+        ...prev,
+        [p.notionPageId]: [
+          ...(prev[p.notionPageId] ?? []),
+          { estacion: prevEstado, inicio: prevEntradaAEstacion, fin: ahora, personaACargo: p.personaACargo },
+        ],
+      }));
+      setUndoState({
+        notionPageId: p.notionPageId,
+        prevEstado,
+        prevEntradaAEstacion,
+        msg:
+          siguiente === "Finalizado"
+            ? `${formatProjectCode(p.codigoProyecto)} finalizado correctamente.`
+            : `Tarea completada. ${formatProjectCode(p.codigoProyecto)} pasó a ${estacionConfig(siguiente).label}.`,
+        at: Date.now(),
+      });
+    } catch (err: any) {
+      setActionError(err?.message ? `No se pudo actualizar Notion: ${err.message}` : "No se pudo actualizar Notion.");
+    } finally {
+      setUpdatingId(null);
+      setConfirmProyecto(null);
+    }
   };
 
-  const doUndo = () => {
+  const doUndo = async () => {
     if (!undoState) return;
-    setProyectos(undoState.prev);
-    setUndoState(null);
+    setUndoing(true);
+    try {
+      const res = await fetch("/api/notion/update", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          notionPageId: undoState.notionPageId,
+          estado: undoState.prevEstado,
+          entradaAEstacion: undoState.prevEntradaAEstacion,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.message || "Failed to undo update");
+      }
+      setProyectos((prev) =>
+        prev.map((x) =>
+          x.notionPageId === undoState.notionPageId
+            ? { ...x, estado: undoState.prevEstado, entradaAEstacion: undoState.prevEntradaAEstacion }
+            : x,
+        ),
+      );
+      setHistorialLocal((prev) => {
+        const list = prev[undoState.notionPageId] ?? [];
+        return { ...prev, [undoState.notionPageId]: list.slice(0, -1) };
+      });
+      setUndoState(null);
+    } catch (err: any) {
+      setActionError(err?.message ? `No se pudo deshacer en Notion: ${err.message}` : "No se pudo deshacer en Notion.");
+    } finally {
+      setUndoing(false);
+    }
   };
 
   const dateStr = now
@@ -819,9 +1003,12 @@ export function FrozzMes() {
     ? now.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
     : "--:--:--";
 
+  if (loading) return <LoadingScreen />;
+  if (loadError) return <ErrorScreen onRetry={fetchProyectos} />;
+
   // ---------- Modo TV ----------
   if (tvMode) {
-    const estacion = ESTACIONES.find((e) => e.id === estacionSel)!;
+    const estacion = ESTACIONES_PRODUCCION.find((e) => e.id === estacionSel) ?? ESTACIONES_PRODUCCION[0];
     const stageProjects = proyectos.filter((p) => p.estado === estacionSel);
     const Icon = estacion.icon;
     return (
@@ -847,10 +1034,10 @@ export function FrozzMes() {
             <div className="flex items-center gap-6">
               <select
                 value={estacionSel}
-                onChange={(e) => setEstacionSel(e.target.value as EstacionId)}
+                onChange={(e) => setEstacionSel(e.target.value as EstadoProyecto)}
                 className="h-12 rounded-xl border border-border bg-card px-4 text-lg font-bold text-foreground"
               >
-                {ESTACIONES.map((e) => (
+                {ESTACIONES_PRODUCCION.map((e) => (
                   <option key={e.id} value={e.id}>
                     {e.label}
                   </option>
@@ -888,6 +1075,7 @@ export function FrozzMes() {
                   tv
                   onCompletar={handleCompletarClick}
                   onHistorial={() => {}}
+                  updating={updatingId === p.notionPageId}
                 />
               ))}
             </div>
@@ -898,13 +1086,16 @@ export function FrozzMes() {
           proyecto={confirmProyecto}
           onConfirm={doCompletar}
           onCancel={() => setConfirmProyecto(null)}
+          submitting={!!updatingId}
         />
         <UndoToast
           visible={!!undoState}
           msg={undoState?.msg ?? ""}
           onUndo={doUndo}
           onDismiss={() => setUndoState(null)}
+          undoing={undoing}
         />
+        <ActionErrorToast msg={actionError} onDismiss={() => setActionError(null)} />
       </div>
     );
   }
@@ -931,7 +1122,7 @@ export function FrozzMes() {
                 </h1>
               </div>
             </div>
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-3">
               <div className="hidden text-right sm:block">
                 <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                   {dateStr}
@@ -940,6 +1131,14 @@ export function FrozzMes() {
                   {timeStr}
                 </div>
               </div>
+              <button
+                onClick={handleSync}
+                disabled={syncing}
+                className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-bold text-foreground hover:bg-secondary disabled:opacity-60"
+              >
+                <RefreshCw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+                {syncing ? "Sincronizando..." : "Sincronizar ahora"}
+              </button>
               <button
                 onClick={() => setTvMode(true)}
                 className="inline-flex items-center gap-2 rounded-xl bg-foreground px-4 py-2.5 text-sm font-bold text-background hover:opacity-90"
@@ -974,10 +1173,10 @@ export function FrozzMes() {
             {vista === "estacion" && (
               <select
                 value={estacionSel}
-                onChange={(e) => setEstacionSel(e.target.value as EstacionId)}
+                onChange={(e) => setEstacionSel(e.target.value as EstadoProyecto)}
                 className="ml-2 h-11 rounded-xl border border-border bg-card px-3 text-sm font-semibold text-foreground"
               >
-                {ESTACIONES.map((e) => (
+                {ESTACIONES_PRODUCCION.map((e) => (
                   <option key={e.id} value={e.id}>
                     {e.label}
                   </option>
@@ -999,10 +1198,7 @@ export function FrozzMes() {
                 onChange={setPrioridad}
                 options={[
                   { value: "all", label: "Todas" },
-                  { value: "urgente", label: "Urgente" },
-                  { value: "alta", label: "Alta" },
-                  { value: "media", label: "Media" },
-                  { value: "baja", label: "Baja" },
+                  ...prioridadesDisponibles.map((p) => ({ value: p, label: p })),
                 ]}
               />
               <FilterSelect
@@ -1011,17 +1207,16 @@ export function FrozzMes() {
                 onChange={setEstadoFiltro}
                 options={[
                   { value: "all", label: "Todas" },
-                  ...ESTACIONES.map((e) => ({ value: e.id, label: e.label })),
-                  { value: "finalizado", label: "Finalizado" },
+                  ...TODAS_LAS_COLUMNAS.map((id) => ({ value: id, label: estacionConfig(id).label })),
                 ]}
               />
               <FilterSelect
-                label="Operario"
-                value={operario}
-                onChange={setOperario}
+                label="Persona a cargo"
+                value={persona}
+                onChange={setPersona}
                 options={[
                   { value: "all", label: "Todos" },
-                  ...OPERARIOS.map((o) => ({ value: o, label: o })),
+                  ...personasDisponibles.map((o) => ({ value: o, label: o })),
                 ]}
               />
               <label className="ml-auto flex min-w-0 flex-col gap-1">
@@ -1033,7 +1228,7 @@ export function FrozzMes() {
                   <input
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Código, cliente o producto…"
+                    placeholder="Código, cliente o equipo…"
                     className="h-11 w-72 rounded-xl border border-border bg-card pl-9 pr-3 text-sm font-medium text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                   />
                 </div>
@@ -1044,55 +1239,72 @@ export function FrozzMes() {
       </header>
 
       <main className="mx-auto max-w-[1920px] px-6 pb-10 pt-6 xl:px-10">
-        {vista === "general" && (
-          <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 min-[1800px]:grid-cols-7">
-            {ESTACIONES.map((e) => (
-              <KanbanColumn
-                key={e.id}
-                estacion={e}
-                proyectos={filtrados.filter((p) => p.estado === e.id)}
-                onCompletar={handleCompletarClick}
-                onHistorial={setHistorialProyecto}
-              />
-            ))}
+        {proyectos.length === 0 ? (
+          <div className="grid min-h-[50vh] place-items-center rounded-3xl border border-dashed border-border text-lg text-muted-foreground">
+            No hay proyectos disponibles.
           </div>
-        )}
-
-        {vista === "estacion" && (
-          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-            {filtrados
-              .filter((p) => p.estado === estacionSel)
-              .map((p) => (
-                <ProyectoCard
-                  key={p.id}
-                  p={p}
-                  onCompletar={handleCompletarClick}
-                  onHistorial={setHistorialProyecto}
-                />
-              ))}
-            {filtrados.filter((p) => p.estado === estacionSel).length === 0 && (
-              <div className="col-span-full grid min-h-[40vh] place-items-center rounded-3xl border border-dashed border-border text-muted-foreground">
-                No hay proyectos en esta estación
+        ) : (
+          <>
+            {vista === "general" && (
+              <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 min-[1800px]:grid-cols-5">
+                {TODAS_LAS_COLUMNAS.map((id) => (
+                  <KanbanColumn
+                    key={id}
+                    estacion={{ id, ...estacionConfig(id) }}
+                    proyectos={filtrados.filter((p) => p.estado === id)}
+                    onCompletar={handleCompletarClick}
+                    onHistorial={setHistorialProyecto}
+                    updatingId={updatingId}
+                  />
+                ))}
               </div>
             )}
-          </div>
-        )}
 
-        {vista === "planeacion" && <PlaneacionView proyectos={proyectos} />}
+            {vista === "estacion" && (
+              <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+                {filtrados
+                  .filter((p) => p.estado === estacionSel)
+                  .map((p) => (
+                    <ProyectoCard
+                      key={p.id}
+                      p={p}
+                      onCompletar={handleCompletarClick}
+                      onHistorial={setHistorialProyecto}
+                      updating={updatingId === p.notionPageId}
+                    />
+                  ))}
+                {filtrados.filter((p) => p.estado === estacionSel).length === 0 && (
+                  <div className="col-span-full grid min-h-[40vh] place-items-center rounded-3xl border border-dashed border-border text-muted-foreground">
+                    No hay proyectos en esta estación
+                  </div>
+                )}
+              </div>
+            )}
+
+            {vista === "planeacion" && <PlaneacionView proyectos={proyectos} />}
+          </>
+        )}
       </main>
 
       <ConfirmModal
         proyecto={confirmProyecto}
         onConfirm={doCompletar}
         onCancel={() => setConfirmProyecto(null)}
+        submitting={!!updatingId}
       />
-      <HistorialModal proyecto={historialProyecto} onClose={() => setHistorialProyecto(null)} />
+      <HistorialModal
+        proyecto={historialProyecto}
+        historial={historialProyecto ? historialLocal[historialProyecto.notionPageId] ?? [] : []}
+        onClose={() => setHistorialProyecto(null)}
+      />
       <UndoToast
         visible={!!undoState}
         msg={undoState?.msg ?? ""}
         onUndo={doUndo}
         onDismiss={() => setUndoState(null)}
+        undoing={undoing}
       />
+      <ActionErrorToast msg={actionError} onDismiss={() => setActionError(null)} />
     </div>
   );
 }

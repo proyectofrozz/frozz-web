@@ -1,5 +1,10 @@
-// src/routes/api/notion/read.ts
-// Endpoint para leer proyectos desde Notion
+// src/routes/api/notion/notion-read.ts
+// Endpoint server-side para leer los proyectos reales desde Notion.
+// Notion es la única fuente de verdad: este endpoint consulta la base de
+// datos y devuelve proyectos ya normalizados con mapNotionPageToProyecto,
+// nunca el objeto crudo de Notion.
+
+import { mapNotionPageToProyecto, type Proyecto } from '@/lib/notion/mapper';
 
 export async function GET() {
   const notionToken = process.env.NOTION_API_KEY;
@@ -9,57 +14,51 @@ export async function GET() {
     return new Response(
       JSON.stringify({
         error: 'Missing Notion API credentials',
-        message: 'NOTION_API_KEY o NOTION_DATABASE_ID not configured'
+        message: 'NOTION_API_KEY o NOTION_DATABASE_ID no están configurados',
       }),
       { status: 400, headers: { 'Content-Type': 'application/json' } }
     );
   }
 
   try {
-    const response = await fetch(
-      `https://api.notion.com/v1/databases/${databaseId}/query`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${notionToken}`,
-          'Notion-Version': '2022-06-28',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          page_size: 100,
-          filter: {
-            property: 'archived',
-            checkbox: { equals: false },
+    const proyectos: Proyecto[] = [];
+    let cursor: string | undefined;
+
+    // Pagina sobre toda la base de datos por si hay más de 100 proyectos.
+    do {
+      const response = await fetch(
+        `https://api.notion.com/v1/databases/${databaseId}/query`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${notionToken}`,
+            'Notion-Version': '2022-06-28',
+            'Content-Type': 'application/json',
           },
-        }),
+          body: JSON.stringify({
+            page_size: 100,
+            ...(cursor ? { start_cursor: cursor } : {}),
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errBody = await response.json().catch(() => ({}));
+        throw new Error(
+          `Notion API error: ${response.status} ${errBody?.message ?? ''}`.trim()
+        );
       }
-    );
 
-    if (!response.ok) {
-      throw new Error(`Notion API error: ${response.status}`);
-    }
+      const data = await response.json();
 
-    const data = await response.json();
+      for (const page of data.results ?? []) {
+        proyectos.push(mapNotionPageToProyecto(page));
+      }
 
-    // Transforma los datos de Notion al formato que tu app necesita
-    const proyectos = data.results.map((page: any) => {
-      const props = page.properties;
-      return {
-        id: page.id,
-        codigoProyecto: props['codigo proyecto']?.rich_text[0]?.plain_text || '',
-        equipo: props['equipo']?.rich_text[0]?.plain_text || '',
-        cliente: props['cliente']?.rich_text[0]?.plain_text || '',
-        personaACargo: props['persona a cargo']?.select?.name || '',
-        fechaInicio: props['fecha de inicio']?.date?.start || '',
-        fechaEstimadaEntrega: props['fecha estimada de entrega']?.date?.start || '',
-        estado: props['estado']?.select?.name || '',
-        avance: props['avance']?.number || 0,
-        prioridad: props['prioridad']?.select?.name || '',
-        entradaAEstacion: props['entrada a estación']?.date?.start || '',
-      };
-    });
+      cursor = data.has_more ? data.next_cursor : undefined;
+    } while (cursor);
 
-    return new Response(JSON.stringify({ proyectos, total: data.results.length }), {
+    return new Response(JSON.stringify({ proyectos, total: proyectos.length }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
