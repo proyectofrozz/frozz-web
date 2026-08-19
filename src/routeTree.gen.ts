@@ -10,33 +10,53 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiNotionReadRouteImport } from './routes/api/notion/read'
+import { Route as ApiNotionUpdateRouteImport } from './routes/api/notion/update'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiNotionReadRoute = ApiNotionReadRouteImport.update({
+  id: '/api/notion/read',
+  path: '/api/notion/read',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiNotionUpdateRoute = ApiNotionUpdateRouteImport.update({
+  id: '/api/notion/update',
+  path: '/api/notion/update',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/notion/read': typeof ApiNotionReadRoute
+  '/api/notion/update': typeof ApiNotionUpdateRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/notion/read': typeof ApiNotionReadRoute
+  '/api/notion/update': typeof ApiNotionUpdateRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/notion/read': typeof ApiNotionReadRoute
+  '/api/notion/update': typeof ApiNotionUpdateRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/api/notion/read' | '/api/notion/update'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/api/notion/read' | '/api/notion/update'
+  id: '__root__' | '/' | '/api/notion/read' | '/api/notion/update'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiNotionReadRoute: typeof ApiNotionReadRoute
+  ApiNotionUpdateRoute: typeof ApiNotionUpdateRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,12 +68,38 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/notion/read': {
+      id: '/api/notion/read'
+      path: '/api/notion/read'
+      fullPath: '/api/notion/read'
+      preLoaderRoute: typeof ApiNotionReadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/notion/update': {
+      id: '/api/notion/update'
+      path: '/api/notion/update'
+      fullPath: '/api/notion/update'
+      preLoaderRoute: typeof ApiNotionUpdateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiNotionReadRoute: ApiNotionReadRoute,
+  ApiNotionUpdateRoute: ApiNotionUpdateRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { startInstance } from './start.ts'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
+  }
+}
