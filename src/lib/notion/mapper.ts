@@ -16,7 +16,7 @@
 //   Estado                     -> Status   (¡NO Select!)
 //   Avance                     -> Number
 //   Prioridad                  -> Select
-//   Entrada a estación         -> Date
+//   Entrada a [Estación]       -> Date (para cada estación de producción)
 
 /** Nombres exactos de las propiedades de la base de datos de Notion. */
 export const NOTION_PROPS = {
@@ -29,7 +29,15 @@ export const NOTION_PROPS = {
   estado: "Estado",
   avance: "Avance",
   prioridad: "Prioridad",
-  entradaAEstacion: "Entrada a estación",
+  entradaDiseño: "Entrada a Diseño",
+  entradaCorte: "Entrada a Corte",
+  entradaDoblez: "Entrada a Doblez",
+  entradaSoldadura: "Entrada a Soldadura",
+  entradaPintura: "Entrada a Pintura",
+  entradaEnsamblaje: "Entrada a Ensamblaje",
+  entradaRefrigeración: "Entrada a Refrigeración",
+  entradaEléctrica: "Entrada a Eléctrica",
+  entradaFinalizado: "Entrada a Finalizado",
 } as const;
 
 // Estado de Notion representa directamente la estación actual del proyecto.
@@ -92,6 +100,16 @@ export interface Proyecto {
   avance: number;
   prioridad: string;
   entradaAEstacion: string | null;
+  // Fechas de entrada a cada estación (guardadas en Notion, recuperadas al recargar)
+  entradaDiseño: string | null;
+  entradaCorte: string | null;
+  entradaDoblez: string | null;
+  entradaSoldadura: string | null;
+  entradaPintura: string | null;
+  entradaEnsamblaje: string | null;
+  entradaRefrigeración: string | null;
+  entradaEléctrica: string | null;
+  entradaFinalizado: string | null;
 }
 
 function getRichText(prop: any): string {
@@ -142,6 +160,16 @@ export function mapNotionPageToProyecto(page: any): Proyecto {
     avance: getNumber(props[NOTION_PROPS.avance]) ?? 0,
     prioridad: getSelect(props[NOTION_PROPS.prioridad]),
     entradaAEstacion: getDate(props[NOTION_PROPS.entradaAEstacion]),
+    // Fechas de entrada a cada estación (persistidas en Notion)
+    entradaDiseño: getDate(props[NOTION_PROPS.entradaDiseño]),
+    entradaCorte: getDate(props[NOTION_PROPS.entradaCorte]),
+    entradaDoblez: getDate(props[NOTION_PROPS.entradaDoblez]),
+    entradaSoldadura: getDate(props[NOTION_PROPS.entradaSoldadura]),
+    entradaPintura: getDate(props[NOTION_PROPS.entradaPintura]),
+    entradaEnsamblaje: getDate(props[NOTION_PROPS.entradaEnsamblaje]),
+    entradaRefrigeración: getDate(props[NOTION_PROPS.entradaRefrigeración]),
+    entradaEléctrica: getDate(props[NOTION_PROPS.entradaEléctrica]),
+    entradaFinalizado: getDate(props[NOTION_PROPS.entradaFinalizado]),
   };
 }
 
@@ -172,6 +200,15 @@ export type ProyectoUpdateFields = Partial<{
   avance: number;
   prioridad: string;
   entradaAEstacion: string | null;
+  entradaDiseño: string | null;
+  entradaCorte: string | null;
+  entradaDoblez: string | null;
+  entradaSoldadura: string | null;
+  entradaPintura: string | null;
+  entradaEnsamblaje: string | null;
+  entradaRefrigeración: string | null;
+  entradaEléctrica: string | null;
+  entradaFinalizado: string | null;
 }>;
 
 /**
@@ -221,6 +258,51 @@ export function buildNotionPropertiesPayload(updates: ProyectoUpdateFields): Rec
   if (updates.entradaAEstacion !== undefined) {
     properties[NOTION_PROPS.entradaAEstacion] = {
       date: updates.entradaAEstacion ? { start: updates.entradaAEstacion } : null,
+    };
+  }
+  if (updates.entradaDiseño !== undefined) {
+    properties[NOTION_PROPS.entradaDiseño] = {
+      date: updates.entradaDiseño ? { start: updates.entradaDiseño } : null,
+    };
+  }
+  if (updates.entradaCorte !== undefined) {
+    properties[NOTION_PROPS.entradaCorte] = {
+      date: updates.entradaCorte ? { start: updates.entradaCorte } : null,
+    };
+  }
+  if (updates.entradaDoblez !== undefined) {
+    properties[NOTION_PROPS.entradaDoblez] = {
+      date: updates.entradaDoblez ? { start: updates.entradaDoblez } : null,
+    };
+  }
+  if (updates.entradaSoldadura !== undefined) {
+    properties[NOTION_PROPS.entradaSoldadura] = {
+      date: updates.entradaSoldadura ? { start: updates.entradaSoldadura } : null,
+    };
+  }
+  if (updates.entradaPintura !== undefined) {
+    properties[NOTION_PROPS.entradaPintura] = {
+      date: updates.entradaPintura ? { start: updates.entradaPintura } : null,
+    };
+  }
+  if (updates.entradaEnsamblaje !== undefined) {
+    properties[NOTION_PROPS.entradaEnsamblaje] = {
+      date: updates.entradaEnsamblaje ? { start: updates.entradaEnsamblaje } : null,
+    };
+  }
+  if (updates.entradaRefrigeración !== undefined) {
+    properties[NOTION_PROPS.entradaRefrigeración] = {
+      date: updates.entradaRefrigeración ? { start: updates.entradaRefrigeración } : null,
+    };
+  }
+  if (updates.entradaEléctrica !== undefined) {
+    properties[NOTION_PROPS.entradaEléctrica] = {
+      date: updates.entradaEléctrica ? { start: updates.entradaEléctrica } : null,
+    };
+  }
+  if (updates.entradaFinalizado !== undefined) {
+    properties[NOTION_PROPS.entradaFinalizado] = {
+      date: updates.entradaFinalizado ? { start: updates.entradaFinalizado } : null,
     };
   }
 
