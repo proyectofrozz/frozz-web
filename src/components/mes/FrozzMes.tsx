@@ -913,6 +913,7 @@ export function FrozzMes() {
     prevEntradaAEstacion: string | null;
     prevEntradaSiguiente: string | null; // Fecha anterior de la estación siguiente
     siguienteEstacion: EstadoProyecto;
+    prevTiempoPorEstacion: string;
     msg: string;
     at: number;
   } | null>(null);
@@ -1012,6 +1013,46 @@ export function FrozzMes() {
     const ahora = new Date().toISOString();
     const prevEstado = p.estado;
     const prevEntradaAEstacion = p.entradaAEstacion;
+    const prevTiempoPorEstacion = p.tiempoPorEstacion;
+
+    // Validar jornada laboral (8 AM - 5 PM, zona Bogotá)
+    const ahoraDate = new Date(ahora);
+    const bogotaFormatter = new Intl.DateTimeFormat('es-CO', {
+      timeZone: 'America/Bogota',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    const bogotaTime = bogotaFormatter.format(ahoraDate);
+    const [hStr, mStr] = bogotaTime.split(':');
+    const horas = parseInt(hStr, 10);
+    
+    if (horas < 8 || horas >= 17) {
+      setActionError("Solo se pueden guardar tiempos entre 8:00 AM y 5:00 PM (jornada laboral)");
+      setConfirmProyecto(null);
+      return;
+    }
+
+    // Calcular tiempo en estación
+    const calcularTiempoEstacion = (): string => {
+      if (!prevEntradaAEstacion) return "0h 0m";
+      const inicio = new Date(prevEntradaAEstacion).getTime();
+      const fin = new Date(ahora).getTime();
+      const mins = Math.max(0, Math.round((fin - inicio) / 60000));
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      return `${h}h ${m}m`;
+    };
+
+    const tiempoEstacion = calcularTiempoEstacion();
+    const estacionLabel = estacionConfig(prevEstado).label;
+    const nuevoRegistro = `${estacionLabel}: ${tiempoEstacion}`;
+    
+    // Construir tiempo acumulativo
+    const tiempoAcumulado = prevTiempoPorEstacion && prevTiempoPorEstacion.trim()
+      ? `${prevTiempoPorEstacion} | ${nuevoRegistro}`
+      : nuevoRegistro;
 
     // Validar jornada laboral (8 AM - 5 PM, zona Bogotá)
     const ahoraDate = new Date(ahora);
@@ -1056,7 +1097,12 @@ export function FrozzMes() {
       const res = await fetch("/api/notion/update", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updateData),
+        body: JSON.stringify({
+          notionPageId: p.notionPageId,
+          estado: siguiente,
+          entradaAEstacion: ahora,
+          tiempoPorEstacion: tiempoAcumulado,
+        }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -1067,7 +1113,12 @@ export function FrozzMes() {
       setProyectos((prev) =>
         prev.map((x) => {
           if (x.notionPageId === p.notionPageId) {
-            const updated = { ...x, estado: siguiente, entradaAEstacion: ahora };
+            const updated = {
+              ...x,
+              estado: siguiente,
+              entradaAEstacion: ahora,
+              tiempoPorEstacion: tiempoAcumulado,
+            };
             (updated as any)[siguienteKey] = ahora;
             return updated;
           }
@@ -1090,10 +1141,11 @@ export function FrozzMes() {
         prevEntradaAEstacion,
         prevEntradaSiguiente,
         siguienteEstacion: siguiente,
+        prevTiempoPorEstacion,
         msg:
           siguiente === "Finalizado"
-            ? `${formatProjectCode(p.codigoProyecto)} finalizado correctamente.`
-            : `Tarea completada. ${formatProjectCode(p.codigoProyecto)} pasó a ${estacionConfig(siguiente).label}.`,
+            ? `${formatProjectCode(p.codigoProyecto)} finalizado correctamente. Tiempo guardado: ${tiempoEstacion}`
+            : `Tarea completada. ${formatProjectCode(p.codigoProyecto)} pasó a ${estacionConfig(siguiente).label}. Tiempo guardado: ${tiempoEstacion}`,
         at: Date.now(),
       });
     } catch (err: any) {
@@ -1123,7 +1175,12 @@ export function FrozzMes() {
       const res = await fetch("/api/notion/update", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updateData),
+        body: JSON.stringify({
+          notionPageId: undoState.notionPageId,
+          estado: undoState.prevEstado,
+          entradaAEstacion: undoState.prevEntradaAEstacion,
+          tiempoPorEstacion: undoState.prevTiempoPorEstacion,
+        }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -1137,6 +1194,7 @@ export function FrozzMes() {
               ...x,
               estado: undoState.prevEstado,
               entradaAEstacion: undoState.prevEntradaAEstacion,
+              tiempoPorEstacion: undoState.prevTiempoPorEstacion,
             };
             (updated as any)[siguienteKey] = undoState.prevEntradaSiguiente;
             return updated;

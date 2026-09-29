@@ -17,6 +17,7 @@
 //   Avance                     -> Number
 //   Prioridad                  -> Select
 //   Entrada a [Estación]       -> Date (para cada estación de producción)
+//   Tiempo por estación        -> Rich text (acumulativo)
 
 /** Nombres exactos de las propiedades de la base de datos de Notion. */
 export const NOTION_PROPS = {
@@ -29,6 +30,8 @@ export const NOTION_PROPS = {
   estado: "Estado",
   avance: "Avance",
   prioridad: "Prioridad",
+  entradaAEstacion: "Entrada a estación",
+  tiempoPorEstacion: "Tiempo por estación",
   entradaDiseño: "Entrada a Diseño",
   entradaCorte: "Entrada a Corte",
   entradaDoblez: "Entrada a Doblez",
@@ -100,6 +103,7 @@ export interface Proyecto {
   avance: number;
   prioridad: string;
   entradaAEstacion: string | null;
+  entradaAEstacion: string | null;
   // Fechas de entrada a cada estación (guardadas en Notion, recuperadas al recargar)
   entradaDiseño: string | null;
   entradaCorte: string | null;
@@ -110,6 +114,7 @@ export interface Proyecto {
   entradaRefrigeración: string | null;
   entradaEléctrica: string | null;
   entradaFinalizado: string | null;
+  tiempoPorEstacion: string;
 }
 
 function getRichText(prop: any): string {
@@ -160,6 +165,7 @@ export function mapNotionPageToProyecto(page: any): Proyecto {
     avance: getNumber(props[NOTION_PROPS.avance]) ?? 0,
     prioridad: getSelect(props[NOTION_PROPS.prioridad]),
     entradaAEstacion: getDate(props[NOTION_PROPS.entradaAEstacion]),
+    entradaAEstacion: getDate(props[NOTION_PROPS.entradaAEstacion]),
     // Fechas de entrada a cada estación (persistidas en Notion)
     entradaDiseño: getDate(props[NOTION_PROPS.entradaDiseño]),
     entradaCorte: getDate(props[NOTION_PROPS.entradaCorte]),
@@ -170,6 +176,7 @@ export function mapNotionPageToProyecto(page: any): Proyecto {
     entradaRefrigeración: getDate(props[NOTION_PROPS.entradaRefrigeración]),
     entradaEléctrica: getDate(props[NOTION_PROPS.entradaEléctrica]),
     entradaFinalizado: getDate(props[NOTION_PROPS.entradaFinalizado]),
+    tiempoPorEstacion: getRichText(props[NOTION_PROPS.tiempoPorEstacion]),
   };
 }
 
@@ -200,6 +207,7 @@ export type ProyectoUpdateFields = Partial<{
   avance: number;
   prioridad: string;
   entradaAEstacion: string | null;
+  entradaAEstacion: string | null;
   entradaDiseño: string | null;
   entradaCorte: string | null;
   entradaDoblez: string | null;
@@ -209,6 +217,7 @@ export type ProyectoUpdateFields = Partial<{
   entradaRefrigeración: string | null;
   entradaEléctrica: string | null;
   entradaFinalizado: string | null;
+  tiempoPorEstacion: string;
 }>;
 
 /**
@@ -260,6 +269,11 @@ export function buildNotionPropertiesPayload(updates: ProyectoUpdateFields): Rec
       date: updates.entradaAEstacion ? { start: updates.entradaAEstacion } : null,
     };
   }
+  if (updates.entradaAEstacion !== undefined) {
+    properties[NOTION_PROPS.entradaAEstacion] = {
+      date: updates.entradaAEstacion ? { start: updates.entradaAEstacion } : null,
+    };
+  }
   if (updates.entradaDiseño !== undefined) {
     properties[NOTION_PROPS.entradaDiseño] = {
       date: updates.entradaDiseño ? { start: updates.entradaDiseño } : null,
@@ -303,6 +317,13 @@ export function buildNotionPropertiesPayload(updates: ProyectoUpdateFields): Rec
   if (updates.entradaFinalizado !== undefined) {
     properties[NOTION_PROPS.entradaFinalizado] = {
       date: updates.entradaFinalizado ? { start: updates.entradaFinalizado } : null,
+    };
+  }
+  if (updates.tiempoPorEstacion !== undefined) {
+    properties[NOTION_PROPS.tiempoPorEstacion] = {
+      rich_text: updates.tiempoPorEstacion ? [{ text: { content: updates.tiempoPorEstacion } }] : [],
+    };
+  }
     };
   }
 
