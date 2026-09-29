@@ -16,7 +16,14 @@
 //   Estado                     -> Status   (¡NO Select!)
 //   Avance                     -> Number
 //   Prioridad                  -> Select
-//   Entrada a estación         -> Date
+//   Entrada a Diseño           -> Date (con hora, 24 h)
+//   Entrada a Corte            -> Date
+//   Entrada a Doblez           -> Date
+//   ... una columna "Entrada a <Estación>" por cada estación del flujo.
+//
+// El historial de estaciones se reconstruye SIEMPRE desde esas columnas de
+// fecha: cada vez que un proyecto pasa a una estación se guarda la fecha de
+// entrada en su columna, y al recargar la página se leen de nuevo desde Notion.
 
 /** Nombres exactos de las propiedades de la base de datos de Notion. */
 export const NOTION_PROPS = {
@@ -29,7 +36,8 @@ export const NOTION_PROPS = {
   estado: "Estado",
   avance: "Avance",
   prioridad: "Prioridad",
-  entradaAEstacion: "Entrada a estación",
+  // Columna antigua (opcional). Solo se usa como respaldo de lectura.
+  entradaAEstacionLegacy: "Entrada a estación",
 } as const;
 
 // Estado de Notion representa directamente la estación actual del proyecto.
@@ -91,7 +99,55 @@ export interface Proyecto {
   estado: EstadoProyecto;
   avance: number;
   prioridad: string;
+  /** Fecha de entrada a la estación actual (derivada de `entradas`). */
   entradaAEstacion: string | null;
+  /** Fecha/hora (ISO) en que el proyecto entró a cada estación, leída de Notion. */
+  entradas: EntradasEstaciones;
+}
+
+/** Estación -> ISO de la fecha de entrada (solo las estaciones que ya tienen fecha). */
+export type EntradasEstaciones = Partial<Record<EstadoProyecto, string>>;
+
+/** Normaliza un nombre de propiedad: minúsculas, sin acentos, espacios simples. */
+export function normalizeName(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Dado el nombre de una propiedad de Notion, devuelve a qué estación
+ * corresponde si es una columna "Entrada a <Estación>" (tolerante a
+ * mayúsculas, acentos y pequeños errores de tipeo como "Dobles").
+ */
+export function estacionDeColumnaEntrada(propName: string): EstadoProyecto | null {
+  const n = normalizeName(propName);
+  const m = n.match(/^entrada a (.+)$/);
+  if (!m) return null;
+  const resto = m[1];
+  for (const est of ORDEN_ESTACIONES) {
+    const e = normalizeName(est);
+    if (resto === e || resto.startsWith(e.slice(0, 4))) return est;
+  }
+  return null;
+}
+
+/** Busca, entre los nombres reales de propiedades, la columna de entrada de una estación. */
+export function findEntradaPropName(propNames: string[], estacion: EstadoProyecto): string | null {
+  return propNames.find((n) => estacionDeColumnaEntrada(n) === estacion) ?? null;
+}
+
+/**
+ * Devuelve la fecha/hora actual en formato ISO con la zona horaria de Bogotá
+ * (UTC-5, sin horario de verano), p. ej. "2026-09-29T14:35:00-05:00".
+ * Así Notion muestra exactamente la hora local de la planta.
+ */
+export function nowBogotaISO(date: Date = new Date()): string {
+  const shifted = new Date(date.getTime() - 5 * 60 * 60 * 1000);
+  return shifted.toISOString().replace(/\.\d{3}Z$/, "-05:00");
 }
 
 function getRichText(prop: any): string {
@@ -127,6 +183,16 @@ export function mapNotionPageToProyecto(page: any): Proyecto {
   const props = page?.properties ?? {};
   const estadoRaw = getStatus(props[NOTION_PROPS.estado]);
 
+  // Lee todas las columnas "Entrada a <Estación>" (tipo Date).
+  const entradas: EntradasEstaciones = {};
+  for (const [name, prop] of Object.entries<any>(props)) {
+    const est = estacionDeColumnaEntrada(name);
+    if (!est) continue;
+    const fecha = getDate(prop);
+    if (fecha) entradas[est] = fecha;
+  }
+  const estadoActual = (isEstadoProyecto(estadoRaw) ? estadoRaw : estadoRaw || ESTADO_INICIAL) as EstadoProyecto;
+
   return {
     id: page.id,
     notionPageId: page.id,
@@ -141,7 +207,9 @@ export function mapNotionPageToProyecto(page: any): Proyecto {
     estado: (isEstadoProyecto(estadoRaw) ? estadoRaw : estadoRaw || ESTADO_INICIAL) as EstadoProyecto,
     avance: getNumber(props[NOTION_PROPS.avance]) ?? 0,
     prioridad: getSelect(props[NOTION_PROPS.prioridad]),
-    entradaAEstacion: getDate(props[NOTION_PROPS.entradaAEstacion]),
+    entradaAEstacion:
+      entradas[estadoActual] ?? getDate(props[NOTION_PROPS.entradaAEstacionLegacy]),
+    entradas,
   };
 }
 
@@ -171,7 +239,8 @@ export type ProyectoUpdateFields = Partial<{
   estado: EstadoProyecto;
   avance: number;
   prioridad: string;
-  entradaAEstacion: string | null;
+  /** Estación -> ISO con fecha y hora (o null para borrar la fecha). */
+  entradas: Partial<Record<EstadoProyecto, string | null>>;
 }>;
 
 /**
@@ -179,8 +248,13 @@ export type ProyectoUpdateFields = Partial<{
  * respetando el tipo real de cada propiedad (en particular: Estado es Status,
  * no Select; Código Proyecto y Avance son Number, no texto).
  */
-export function buildNotionPropertiesPayload(updates: ProyectoUpdateFields): Record<string, any> {
+export function buildNotionPropertiesPayload(
+  updates: ProyectoUpdateFields,
+  /** Nombres reales de las propiedades de tipo Date de la base de datos. */
+  datePropNames: string[] = [],
+): { properties: Record<string, any>; missing: EstadoProyecto[] } {
   const properties: Record<string, any> = {};
+  const missing: EstadoProyecto[] = [];
 
   if (updates.codigoProyecto !== undefined) {
     properties[NOTION_PROPS.codigoProyecto] = { number: updates.codigoProyecto };
@@ -218,11 +292,16 @@ export function buildNotionPropertiesPayload(updates: ProyectoUpdateFields): Rec
   if (updates.prioridad !== undefined) {
     properties[NOTION_PROPS.prioridad] = { select: { name: updates.prioridad } };
   }
-  if (updates.entradaAEstacion !== undefined) {
-    properties[NOTION_PROPS.entradaAEstacion] = {
-      date: updates.entradaAEstacion ? { start: updates.entradaAEstacion } : null,
-    };
+  if (updates.entradas) {
+    for (const [est, fecha] of Object.entries(updates.entradas) as [EstadoProyecto, string | null][]) {
+      const propName = findEntradaPropName(datePropNames, est);
+      if (!propName) {
+        missing.push(est);
+        continue;
+      }
+      properties[propName] = { date: fecha ? { start: fecha } : null };
+    }
   }
 
-  return properties;
+  return { properties, missing };
 }
