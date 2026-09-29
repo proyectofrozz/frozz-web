@@ -90,10 +90,10 @@ const fmtDateTime = (s: string | null) =>
     ? new Date(s).toLocaleString("es-CO", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
     : "Sin información";
 
-function elapsedText(fromISO: string | null, toISO?: string) {
+function elapsedText(fromISO: string | null, toISO?: string, nowTime?: Date) {
   if (!fromISO) return "Sin información";
   const from = new Date(fromISO).getTime();
-  const to = toISO ? new Date(toISO).getTime() : Date.now();
+  const to = toISO ? new Date(toISO).getTime() : (nowTime ? nowTime.getTime() : Date.now());
   const mins = Math.max(0, Math.round((to - from) / 60000));
   const h = Math.floor(mins / 60);
   const m = mins % 60;
@@ -154,12 +154,14 @@ function ProyectoCard({
   onHistorial,
   updating = false,
   tv = false,
+  now = null,
 }: {
   p: Proyecto;
   onCompletar: (p: Proyecto) => void;
   onHistorial: (p: Proyecto) => void;
   updating?: boolean;
   tv?: boolean;
+  now?: Date | null;
 }) {
   const delayed = isDelayed(p);
   const pct = progressPct(p);
@@ -206,7 +208,7 @@ function ProyectoCard({
         </div>
         <div className="flex items-center gap-1.5 text-muted-foreground">
           <Clock className={`shrink-0 ${tv ? "h-5 w-5" : "h-4 w-4"}`} />
-          <span className="truncate">En estación: {elapsedText(p.entradaAEstacion)}</span>
+          <span className="truncate">En estación: {elapsedText(p.entradaAEstacion, undefined, now)}</span>
         </div>
         <div className="flex items-center gap-1.5 text-muted-foreground">
           <CalendarDays className={`shrink-0 ${tv ? "h-5 w-5" : "h-4 w-4"}`} />
@@ -285,12 +287,14 @@ function KanbanColumn({
   onCompletar,
   onHistorial,
   updatingId,
+  now = null,
 }: {
   estacion: { id: EstadoProyecto; label: string; icon: typeof Scissors; color: string };
   proyectos: Proyecto[];
   onCompletar: (p: Proyecto) => void;
   onHistorial: (p: Proyecto) => void;
   updatingId: string | null;
+  now?: Date | null;
 }) {
   const Icon = estacion.icon;
   const activos = proyectos.length;
@@ -354,6 +358,7 @@ function KanbanColumn({
               onCompletar={onCompletar}
               onHistorial={onHistorial}
               updating={updatingId === p.notionPageId}
+              now={now}
             />
           ))
         )}
@@ -808,6 +813,7 @@ export function FrozzMes() {
     notionPageId: string;
     prevEstado: EstadoProyecto;
     prevEntradaAEstacion: string | null;
+    prevTiempoPorEstacion: string;
     msg: string;
     at: number;
   } | null>(null);
@@ -907,6 +913,46 @@ export function FrozzMes() {
     const ahora = new Date().toISOString();
     const prevEstado = p.estado;
     const prevEntradaAEstacion = p.entradaAEstacion;
+    const prevTiempoPorEstacion = p.tiempoPorEstacion;
+
+    // Validar jornada laboral (8 AM - 5 PM, zona Bogotá)
+    const ahoraDate = new Date(ahora);
+    const bogotaFormatter = new Intl.DateTimeFormat('es-CO', {
+      timeZone: 'America/Bogota',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    const bogotaTime = bogotaFormatter.format(ahoraDate);
+    const [hStr, mStr] = bogotaTime.split(':');
+    const horas = parseInt(hStr, 10);
+    
+    if (horas < 8 || horas >= 17) {
+      setActionError("Solo se pueden guardar tiempos entre 8:00 AM y 5:00 PM (jornada laboral)");
+      setConfirmProyecto(null);
+      return;
+    }
+
+    // Calcular tiempo en estación
+    const calcularTiempoEstacion = (): string => {
+      if (!prevEntradaAEstacion) return "0h 0m";
+      const inicio = new Date(prevEntradaAEstacion).getTime();
+      const fin = new Date(ahora).getTime();
+      const mins = Math.max(0, Math.round((fin - inicio) / 60000));
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      return `${h}h ${m}m`;
+    };
+
+    const tiempoEstacion = calcularTiempoEstacion();
+    const estacionLabel = estacionConfig(prevEstado).label;
+    const nuevoRegistro = `${estacionLabel}: ${tiempoEstacion}`;
+    
+    // Construir tiempo acumulativo
+    const tiempoAcumulado = prevTiempoPorEstacion && prevTiempoPorEstacion.trim()
+      ? `${prevTiempoPorEstacion} | ${nuevoRegistro}`
+      : nuevoRegistro;
 
     setUpdatingId(p.notionPageId);
     try {
@@ -917,6 +963,7 @@ export function FrozzMes() {
           notionPageId: p.notionPageId,
           estado: siguiente,
           entradaAEstacion: ahora,
+          tiempoPorEstacion: tiempoAcumulado,
         }),
       });
       if (!res.ok) {
@@ -927,7 +974,9 @@ export function FrozzMes() {
       // Solo se considera exitosa la actualización una vez Notion confirma.
       setProyectos((prev) =>
         prev.map((x) =>
-          x.notionPageId === p.notionPageId ? { ...x, estado: siguiente, entradaAEstacion: ahora } : x,
+          x.notionPageId === p.notionPageId 
+            ? { ...x, estado: siguiente, entradaAEstacion: ahora, tiempoPorEstacion: tiempoAcumulado } 
+            : x,
         ),
       );
       setHistorialLocal((prev) => ({
@@ -941,10 +990,11 @@ export function FrozzMes() {
         notionPageId: p.notionPageId,
         prevEstado,
         prevEntradaAEstacion,
+        prevTiempoPorEstacion,
         msg:
           siguiente === "Finalizado"
-            ? `${formatProjectCode(p.codigoProyecto)} finalizado correctamente.`
-            : `Tarea completada. ${formatProjectCode(p.codigoProyecto)} pasó a ${estacionConfig(siguiente).label}.`,
+            ? `${formatProjectCode(p.codigoProyecto)} finalizado correctamente. Tiempo guardado: ${tiempoEstacion}`
+            : `Tarea completada. ${formatProjectCode(p.codigoProyecto)} pasó a ${estacionConfig(siguiente).label}. Tiempo guardado: ${tiempoEstacion}`,
         at: Date.now(),
       });
     } catch (err: any) {
@@ -966,6 +1016,7 @@ export function FrozzMes() {
           notionPageId: undoState.notionPageId,
           estado: undoState.prevEstado,
           entradaAEstacion: undoState.prevEntradaAEstacion,
+          tiempoPorEstacion: undoState.prevTiempoPorEstacion,
         }),
       });
       if (!res.ok) {
@@ -975,7 +1026,12 @@ export function FrozzMes() {
       setProyectos((prev) =>
         prev.map((x) =>
           x.notionPageId === undoState.notionPageId
-            ? { ...x, estado: undoState.prevEstado, entradaAEstacion: undoState.prevEntradaAEstacion }
+            ? { 
+              ...x, 
+              estado: undoState.prevEstado, 
+              entradaAEstacion: undoState.prevEntradaAEstacion,
+              tiempoPorEstacion: undoState.prevTiempoPorEstacion,
+            }
             : x,
         ),
       );
@@ -1076,6 +1132,7 @@ export function FrozzMes() {
                   onCompletar={handleCompletarClick}
                   onHistorial={() => {}}
                   updating={updatingId === p.notionPageId}
+                  now={now}
                 />
               ))}
             </div>
@@ -1255,6 +1312,7 @@ export function FrozzMes() {
                     onCompletar={handleCompletarClick}
                     onHistorial={setHistorialProyecto}
                     updatingId={updatingId}
+                    now={now}
                   />
                 ))}
               </div>
@@ -1271,6 +1329,7 @@ export function FrozzMes() {
                       onCompletar={handleCompletarClick}
                       onHistorial={setHistorialProyecto}
                       updating={updatingId === p.notionPageId}
+                      now={now}
                     />
                   ))}
                 {filtrados.filter((p) => p.estado === estacionSel).length === 0 && (

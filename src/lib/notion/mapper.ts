@@ -17,6 +17,7 @@
 //   Avance                     -> Number
 //   Prioridad                  -> Select
 //   Entrada a estación         -> Date
+//   Tiempo por estación        -> Rich text (acumulativo)
 
 /** Nombres exactos de las propiedades de la base de datos de Notion. */
 export const NOTION_PROPS = {
@@ -30,6 +31,7 @@ export const NOTION_PROPS = {
   avance: "Avance",
   prioridad: "Prioridad",
   entradaAEstacion: "Entrada a estación",
+  tiempoPorEstacion: "Tiempo por estación",
 } as const;
 
 // Estado de Notion representa directamente la estación actual del proyecto.
@@ -92,6 +94,7 @@ export interface Proyecto {
   avance: number;
   prioridad: string;
   entradaAEstacion: string | null;
+  tiempoPorEstacion: string;
 }
 
 function getRichText(prop: any): string {
@@ -142,6 +145,7 @@ export function mapNotionPageToProyecto(page: any): Proyecto {
     avance: getNumber(props[NOTION_PROPS.avance]) ?? 0,
     prioridad: getSelect(props[NOTION_PROPS.prioridad]),
     entradaAEstacion: getDate(props[NOTION_PROPS.entradaAEstacion]),
+    tiempoPorEstacion: getRichText(props[NOTION_PROPS.tiempoPorEstacion]),
   };
 }
 
@@ -172,6 +176,7 @@ export type ProyectoUpdateFields = Partial<{
   avance: number;
   prioridad: string;
   entradaAEstacion: string | null;
+  tiempoPorEstacion: string;
 }>;
 
 /**
@@ -221,6 +226,11 @@ export function buildNotionPropertiesPayload(updates: ProyectoUpdateFields): Rec
   if (updates.entradaAEstacion !== undefined) {
     properties[NOTION_PROPS.entradaAEstacion] = {
       date: updates.entradaAEstacion ? { start: updates.entradaAEstacion } : null,
+    };
+  }
+  if (updates.tiempoPorEstacion !== undefined) {
+    properties[NOTION_PROPS.tiempoPorEstacion] = {
+      rich_text: updates.tiempoPorEstacion ? [{ text: { content: updates.tiempoPorEstacion } }] : [],
     };
   }
 
