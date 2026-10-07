@@ -28,7 +28,6 @@ export const ENTRADA_PROPS: Record<EstadoProyecto, string> = {
   "Eléctrica": "Entrada a Eléctrica",
   "Finalizado": "Entrada a Finalizado",
 };
-
 export type EstadoProyecto =
   | "Sin empezar"
   | "Diseño"
@@ -155,7 +154,6 @@ export function mapNotionPageToProyecto(page: any): Proyecto {
   const estadoActual = (isEstadoProyecto(estadoRaw) ? estadoRaw : ESTADO_INICIAL) as EstadoProyecto;
 
   const entradas: EntradasEstaciones = {};
-
   // Leer primero por los nombres exactos de la base FROZZ.
   for (const estacion of ORDEN_ESTACIONES) {
     const prop = props[ENTRADA_PROPS[estacion]];
