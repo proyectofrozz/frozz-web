@@ -83,6 +83,19 @@ export const Route = createFileRoute('/api/notion/update')({
 
           const { properties, missing } = buildNotionPropertiesPayload(updates, datePropNames);
 
+          // Nunca hacer un PATCH parcial: si falta una columna de entrada,
+          // se rechaza toda la operación antes de tocar Estado/Tiempo.
+          if (missing.length > 0) {
+            return new Response(
+              JSON.stringify({
+                error: 'Missing station date columns',
+                message: `Faltan en Notion las columnas de entrada: ${missing.join(', ')}`,
+                missingColumns: missing,
+              }),
+              { status: 400, headers: { 'Content-Type': 'application/json' } },
+            );
+          }
+
           if (Object.keys(properties).length === 0) {
             return new Response(
               JSON.stringify({ error: 'No fields to update were provided' }),
