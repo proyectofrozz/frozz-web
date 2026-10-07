@@ -11,7 +11,7 @@
 // produce un 404 en producción aunque el archivo exista.
 
 import { createFileRoute } from '@tanstack/react-router';
-import { buildNotionPropertiesPayload, type ProyectoUpdateFields } from '@/lib/notion/mapper';
+import { buildNotionPropertiesPayload, ENTRADA_PROPS, type ProyectoUpdateFields } from '@/lib/notion/mapper';
 
 interface UpdateProjectRequest extends ProyectoUpdateFields {
   notionPageId: string;
@@ -71,17 +71,39 @@ export const Route = createFileRoute('/api/notion/update')({
 
           let datePropNames: string[] = [];
           if (updates.entradas && Object.keys(updates.entradas).length > 0) {
+            // Primero usamos el contrato explícito de la base FROZZ.
+            // Esto evita que una diferencia de versión/schema de la API de Notion
+            // haga que una columna Date existente sea reportada como inexistente.
+            datePropNames = Object.values(ENTRADA_PROPS);
+
+            // Intentamos además leer el schema para detectar instalaciones donde
+            // alguna columna haya sido renombrada. Si falla, conservamos los nombres
+            // canónicos anteriores en vez de bloquear una operación válida.
             const databaseId = process.env.NOTION_DATABASE_ID;
-            if (!databaseId) {
-              return new Response(
-                JSON.stringify({ error: 'Missing NOTION_DATABASE_ID' }),
-                { status: 400, headers: { 'Content-Type': 'application/json' } },
-              );
+            if (databaseId) {
+              try {
+                const discovered = await getDateColumnNames(notionToken, databaseId);
+                datePropNames = Array.from(new Set([...datePropNames, ...discovered]));
+              } catch (schemaError) {
+                console.warn('No se pudo leer el schema de Notion; se usarán nombres canónicos de Entrada a estación:', schemaError);
+              }
             }
-            datePropNames = await getDateColumnNames(notionToken, databaseId);
           }
 
           const { properties, missing } = buildNotionPropertiesPayload(updates, datePropNames);
+
+          // Nunca hacer un PATCH parcial: si falta una columna de entrada,
+          // se rechaza toda la operación antes de tocar Estado/Tiempo.
+          if (missing.length > 0) {
+            return new Response(
+              JSON.stringify({
+                error: 'Missing station date columns',
+                message: `Faltan en Notion las columnas de entrada: ${missing.join(', ')}`,
+                missingColumns: missing,
+              }),
+              { status: 400, headers: { 'Content-Type': 'application/json' } },
+            );
+          }
 
           if (Object.keys(properties).length === 0) {
             return new Response(
