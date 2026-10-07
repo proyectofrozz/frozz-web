@@ -27,6 +27,7 @@ import {
   ChevronRight,
   RefreshCw,
   Loader2,
+  AlertCircle,
 } from "lucide-react";
 import {
   type Proyecto,
@@ -38,6 +39,12 @@ import {
   orSinInformacion,
   nowBogotaISO,
 } from "@/lib/notion/mapper";
+import {
+  isWithinWorkHours,
+  calculateElapsedTime,
+  buildAccumulativeTimeRecord,
+  type UndoState,
+} from "@/lib/timeTracking";
 
 // ---------- Historial (persistido en Notion) ----------
 // Cada estación tiene una columna de fecha "Entrada a <Estación>" en Notion.
@@ -93,7 +100,7 @@ const ESTACION_CONFIG: Record<
 const ESTACIONES_PRODUCCION: { id: EstadoProyecto; label: string; icon: typeof Scissors; color: string }[] =
   ORDEN_ESTACIONES.filter((id) => id !== "Finalizado").map((id) => ({ id, ...ESTACION_CONFIG[id] }));
 
-function estacionConfig(estado: EstadoProyecto) {
+export function estacionConfig(estado: EstadoProyecto) {
   return ESTACION_CONFIG[estado] ?? { label: estado, icon: Factory, color: "var(--muted-foreground)" };
 }
 
