@@ -15,9 +15,10 @@ import { mapNotionPageToProyecto, type Proyecto } from '@/lib/notion/mapper';
 export const Route = createFileRoute('/api/notion/read')({
   server: {
     handlers: {
-      GET: async () => {
+      GET: async ({ request }) => {
         const notionToken = process.env.NOTION_API_KEY;
         const databaseId = process.env.NOTION_DATABASE_ID;
+        const requestedPageId = new URL(request.url).searchParams.get('notionPageId');
 
         if (!notionToken || !databaseId) {
           return new Response(
@@ -30,6 +31,31 @@ export const Route = createFileRoute('/api/notion/read')({
         }
 
         try {
+          // Modo puntual: leer una sola página de Notion antes de finalizar o deshacer.
+          if (requestedPageId) {
+            const pageResponse = await fetch(
+              `https://api.notion.com/v1/pages/${requestedPageId}`,
+              {
+                headers: {
+                  Authorization: `Bearer ${notionToken}`,
+                  'Notion-Version': '2022-06-28',
+                },
+                cache: 'no-store',
+              },
+            );
+            if (!pageResponse.ok) {
+              const errBody = await pageResponse.json().catch(() => ({}));
+              throw new Error(
+                `Notion API error: ${pageResponse.status} ${errBody?.message ?? ''}`.trim(),
+              );
+            }
+            const page = await pageResponse.json();
+            return new Response(
+              JSON.stringify({ proyecto: mapNotionPageToProyecto(page), total: 1 }),
+              { status: 200, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } },
+            );
+          }
+
           const proyectos: Proyecto[] = [];
           let cursor: string | undefined;
 
