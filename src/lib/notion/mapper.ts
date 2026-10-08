@@ -39,13 +39,8 @@ export const NOTION_PROPS = {
   estado: "Estado",
   avance: "Avance",
   prioridad: "Prioridad",
-  estado: "Estado",
-  avance: "Avance",
-  prioridad: "Prioridad",
   // Columna antigua (opcional). Solo se usa como respaldo de lectura.
   entradaAEstacionLegacy: "Entrada a estación",
-  entradaAEstacion: "Entrada a estación",
-  tiempoPorEstacion: "Tiempo por estación",
   entradaDiseño: "Entrada a Diseño",
   entradaCorte: "Entrada a Corte",
   entradaDoblez: "Entrada a Doblez",
@@ -55,7 +50,6 @@ export const NOTION_PROPS = {
   entradaRefrigeración: "Entrada a Refrigeración",
   entradaEléctrica: "Entrada a Eléctrica",
   entradaFinalizado: "Entrada a Finalizado",
-} as const;
 } as const;
 
 // Estado de Notion representa directamente la estación actual del proyecto.
@@ -116,9 +110,6 @@ export interface Proyecto {
   fechaEstimadaEntrega: string | null;
   estado: EstadoProyecto;
   avance: number;
-  prioridad: string;
-  /** Fecha de entrada a la estación actual (derivada de `entradas`). */
-  entradaAEstacion: string | null;
   prioridad: string;
   /** Fecha de entrada a la estación actual (derivada de `entradas`). */
   entradaAEstacion: string | null;
@@ -264,9 +255,6 @@ export type ProyectoUpdateFields = Partial<{
   estado: EstadoProyecto;
   avance: number;
   prioridad: string;
-  estado: EstadoProyecto;
-  avance: number;
-  prioridad: string;
   entradaAEstacion: string | null;
   tiempoPorEstacion: string;
   /** Estación -> ISO con fecha y hora (o null para borrar la fecha). */
@@ -332,61 +320,9 @@ export function buildNotionPropertiesPayload(
       properties[propName] = { date: fecha ? { start: fecha } : null };
     }
   }
-  if (updates.entradaAEstacion !== undefined) {
-    properties[NOTION_PROPS.entradaAEstacion] = {
-      date: updates.entradaAEstacion ? { start: updates.entradaAEstacion } : null,
-    };
-  }
-  if (updates.entradaDiseño !== undefined) {
-    properties[NOTION_PROPS.entradaDiseño] = {
-      date: updates.entradaDiseño ? { start: updates.entradaDiseño } : null,
-    };
-  }
-  if (updates.entradaCorte !== undefined) {
-    properties[NOTION_PROPS.entradaCorte] = {
-      date: updates.entradaCorte ? { start: updates.entradaCorte } : null,
-    };
-  }
-  if (updates.entradaDoblez !== undefined) {
-    properties[NOTION_PROPS.entradaDoblez] = {
-      date: updates.entradaDoblez ? { start: updates.entradaDoblez } : null,
-    };
-  }
-  if (updates.entradaSoldadura !== undefined) {
-    properties[NOTION_PROPS.entradaSoldadura] = {
-      date: updates.entradaSoldadura ? { start: updates.entradaSoldadura } : null,
-    };
-  }
-  if (updates.entradaPintura !== undefined) {
-    properties[NOTION_PROPS.entradaPintura] = {
-      date: updates.entradaPintura ? { start: updates.entradaPintura } : null,
-    };
-  }
-  if (updates.entradaEnsamblaje !== undefined) {
-    properties[NOTION_PROPS.entradaEnsamblaje] = {
-      date: updates.entradaEnsamblaje ? { start: updates.entradaEnsamblaje } : null,
-    };
-  }
-  if (updates.entradaRefrigeración !== undefined) {
-    properties[NOTION_PROPS.entradaRefrigeración] = {
-      date: updates.entradaRefrigeración ? { start: updates.entradaRefrigeración } : null,
-    };
-  }
-  if (updates.entradaEléctrica !== undefined) {
-    properties[NOTION_PROPS.entradaEléctrica] = {
-      date: updates.entradaEléctrica ? { start: updates.entradaEléctrica } : null,
-    };
-  }
-  if (updates.entradaFinalizado !== undefined) {
-    properties[NOTION_PROPS.entradaFinalizado] = {
-      date: updates.entradaFinalizado ? { start: updates.entradaFinalizado } : null,
-    };
-  }
   if (updates.tiempoPorEstacion !== undefined) {
     properties[NOTION_PROPS.tiempoPorEstacion] = {
       rich_text: updates.tiempoPorEstacion ? [{ text: { content: updates.tiempoPorEstacion } }] : [],
-    };
-  }
     };
   }
 

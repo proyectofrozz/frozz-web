@@ -1004,49 +1004,10 @@ export function FrozzMes() {
       setConfirmProyecto(null);
       return;
     }
+
     const ahora = nowBogotaISO();
     const prevEstado = p.estado;
     const prevEntradaAEstacion = p.entradas[p.estado] ?? p.entradaAEstacion;
-    const prevTiempoPorEstacion = p.tiempoPorEstacion;
-
-    // Validar jornada laboral (8 AM - 5 PM, zona Bogotá)
-    const ahoraDate = new Date(ahora);
-    const bogotaFormatter = new Intl.DateTimeFormat('es-CO', {
-      timeZone: 'America/Bogota',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    });
-    const bogotaTime = bogotaFormatter.format(ahoraDate);
-    const [hStr, mStr] = bogotaTime.split(':');
-    const horas = parseInt(hStr, 10);
-
-    if (horas < 8 || horas >= 17) {
-      setActionError("Solo se pueden guardar tiempos entre 8:00 AM y 5:00 PM (jornada laboral)");
-      setConfirmProyecto(null);
-      return;
-    }
-
-    // Calcular tiempo en estación
-    const calcularTiempoEstacion = (): string => {
-      if (!prevEntradaAEstacion) return "0h 0m";
-      const inicio = new Date(prevEntradaAEstacion).getTime();
-      const fin = new Date(ahora).getTime();
-      const mins = Math.max(0, Math.round((fin - inicio) / 60000));
-      const h = Math.floor(mins / 60);
-      const m = mins % 60;
-      return `${h}h ${m}m`;
-    };
-
-    const tiempoEstacion = calcularTiempoEstacion();
-    const estacionLabel = estacionConfig(prevEstado).label;
-    const nuevoRegistro = `${estacionLabel}: ${tiempoEstacion}`;
-
-    // Construir tiempo acumulativo
-    const tiempoAcumulado = prevTiempoPorEstacion && prevTiempoPorEstacion.trim()
-      ? `${prevTiempoPorEstacion} | ${nuevoRegistro}`
-      : nuevoRegistro;
 
     // Obtener la propiedad de entrada de la siguiente estación
     const siguienteKey = getEntradaPropertyKey(siguiente);
@@ -1057,49 +1018,14 @@ export function FrozzMes() {
     }
 
     // Guardar fecha anterior de la siguiente estación para deshacer
-    const prevEntradaSiguiente = p[siguienteKey] ?? null;
+    const prevEntradaSiguiente = p.entradas[siguiente] ?? null;
 
-    // Validar jornada laboral (8 AM - 5 PM, zona Bogotá)
-    const ahoraDate = new Date(ahora);
-    const bogotaFormatter = new Intl.DateTimeFormat('es-CO', {
-      timeZone: 'America/Bogota',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    });
-    const bogotaTime = bogotaFormatter.format(ahoraDate);
-    const [hStr, mStr] = bogotaTime.split(':');
-    const horas = parseInt(hStr, 10);
-    
-    if (horas < 8 || horas >= 17) {
-      setActionError("Solo se pueden guardar tiempos entre 8:00 AM y 5:00 PM (jornada laboral)");
-      setConfirmProyecto(null);
-      return;
-    }
-
-    // Calcular tiempo en estación
-    const calcularTiempoEstacion = (): string => {
-      if (!prevEntradaAEstacion) return "0h 0m";
-      const inicio = new Date(prevEntradaAEstacion).getTime();
-      const fin = new Date(ahora).getTime();
-      const mins = Math.max(0, Math.round((fin - inicio) / 60000));
-      const h = Math.floor(mins / 60);
-      const m = mins % 60;
-      return `${h}h ${m}m`;
-    };
-
-    const tiempoEstacion = calcularTiempoEstacion();
     setUpdatingId(p.notionPageId);
     try {
-      // Construir objeto de actualización dinámicamente
-      const updateData: any = {
-        notionPageId: p.notionPageId,
-        estado: siguiente,
-        entradaAEstacion: ahora,
-        [siguienteKey]: ahora, // Guardar fecha en la columna de entrada de la siguiente estación
-      };
-
+      // Realizar la actualización en Notion
+      // Solo se guarda:
+      // 1. El nuevo estado (siguiente estación)
+      // 2. La hora de entrada a la siguiente estación
       const res = await fetch("/api/notion/update", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -1107,15 +1033,16 @@ export function FrozzMes() {
           notionPageId: p.notionPageId,
           estado: siguiente,
           entradaAEstacion: ahora,
-          tiempoPorEstacion: tiempoAcumulado,
-          // Se guarda la fecha y hora de entrada a la nueva estación en su columna de Notion.
+          // Se guarda la fecha y hora de entrada a la nueva estación en su columna de Notion
           entradas: { [siguiente]: ahora },
         }),
       });
+
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body?.message || "Failed to update project");
       }
+
       const resBody = await res.json().catch(() => ({}));
       const missingColumns: string[] = resBody?.missingColumns ?? [];
       if (missingColumns.length > 0) {
@@ -1128,15 +1055,12 @@ export function FrozzMes() {
       setProyectos((prev) =>
         prev.map((x) => {
           if (x.notionPageId === p.notionPageId) {
-            const updated = {
+            return {
               ...x,
               estado: siguiente,
               entradaAEstacion: ahora,
-              tiempoPorEstacion: tiempoAcumulado,
               entradas: { ...x.entradas, [siguiente]: ahora },
             };
-            (updated as any)[siguienteKey] = ahora;
-            return updated;
           }
           return x;
         }),
@@ -1151,6 +1075,12 @@ export function FrozzMes() {
         ],
       }));
 
+      // Mensaje de confirmación
+      const msg =
+        siguiente === "Finalizado"
+          ? `${formatProjectCode(p.codigoProyecto)} finalizado correctamente.`
+          : `Tarea completada. ${formatProjectCode(p.codigoProyecto)} pasó a ${estacionConfig(siguiente).label}.`;
+
       setUndoState({
         notionPageId: p.notionPageId,
         prevEstado,
@@ -1158,14 +1088,8 @@ export function FrozzMes() {
         prevEntradaAEstacion,
         prevEntradaSiguiente,
         siguienteEstacion: siguiente,
-        prevTiempoPorEstacion,
-        msg:
-          siguiente === "Finalizado"
-            ? `${formatProjectCode(p.codigoProyecto)} finalizado correctamente. Tiempo guardado: ${tiempoEstacion}`
-        msg:
-          siguiente === "Finalizado"
-            ? `${formatProjectCode(p.codigoProyecto)} finalizado correctamente. Tiempo guardado: ${tiempoEstacion}`
-            : `Tarea completada. ${formatProjectCode(p.codigoProyecto)} pasó a ${estacionConfig(siguiente).label}. Tiempo guardado: ${tiempoEstacion}`,
+        prevTiempoPorEstacion: "",
+        msg,
         at: Date.now(),
       });
     } catch (err: any) {
@@ -1180,18 +1104,6 @@ export function FrozzMes() {
     if (!undoState) return;
     setUndoing(true);
     try {
-      const siguienteKey = getEntradaPropertyKey(undoState.siguienteEstacion);
-      if (!siguienteKey) {
-        throw new Error("No se puede deshacer: estación no válida");
-      }
-
-      const updateData: any = {
-        notionPageId: undoState.notionPageId,
-        estado: undoState.prevEstado,
-        entradaAEstacion: undoState.prevEntradaAEstacion,
-        [siguienteKey]: undoState.prevEntradaSiguiente, // Restaurar fecha anterior
-      };
-
       const res = await fetch("/api/notion/update", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -1199,9 +1111,8 @@ export function FrozzMes() {
           notionPageId: undoState.notionPageId,
           estado: undoState.prevEstado,
           entradaAEstacion: undoState.prevEntradaAEstacion,
-          tiempoPorEstacion: undoState.prevTiempoPorEstacion,
-          // Se borra la fecha de entrada de la estación a la que se había avanzado.
-          entradas: { [undoState.estacionNueva]: null },
+          // Se restaura la fecha anterior de la estación (o se borra si no existía)
+          entradas: { [undoState.estacionNueva]: undoState.prevEntradaSiguiente },
         }),
       });
       if (!res.ok) {
@@ -1213,16 +1124,17 @@ export function FrozzMes() {
         prev.map((x) => {
           if (x.notionPageId === undoState.notionPageId) {
             const entradas = { ...x.entradas };
-            delete entradas[undoState.estacionNueva];
-            const updated = {
+            if (undoState.prevEntradaSiguiente === null) {
+              delete entradas[undoState.estacionNueva];
+            } else {
+              entradas[undoState.estacionNueva] = undoState.prevEntradaSiguiente;
+            }
+            return {
               ...x,
               estado: undoState.prevEstado,
               entradaAEstacion: undoState.prevEntradaAEstacion ?? entradas[undoState.prevEstado] ?? null,
-              tiempoPorEstacion: undoState.prevTiempoPorEstacion,
               entradas,
             };
-            (updated as any)[siguienteKey] = undoState.prevEntradaSiguiente;
-            return updated;
           }
           return x;
         }),
