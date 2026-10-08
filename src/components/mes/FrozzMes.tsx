@@ -36,20 +36,35 @@ import {
   SIGUIENTE_ESTADO,
   formatProjectCode,
   orSinInformacion,
+  nowBogotaISO,
 } from "@/lib/notion/mapper";
 
-// ---------- Historial (SOLO local de sesión, NO persistido en Notion) ----------
-// Notion no tiene una propiedad que almacene el historial completo de
-// estaciones, solamente "Entrada a estación" (el momento en que el proyecto
-// entró a la estación actual). Por lo tanto este historial se reconstruye
-// únicamente a partir de las transiciones realizadas durante la sesión actual
-// del navegador y se pierde al recargar o sincronizar. No representa datos
-// reales de Notion y nunca debe presentarse como si lo fuera.
+// ---------- Historial (persistido en Notion) ----------
+// Cada estación tiene una columna de fecha "Entrada a <Estación>" en Notion.
+// El historial se reconstruye SIEMPRE a partir de esas columnas, por lo que
+// se mantiene al recargar la página o volver a entrar al sitio.
 interface HistorialEntry {
   estacion: EstadoProyecto;
   inicio: string | null; // ISO
-  fin: string; // ISO
-  personaACargo: string;
+  fin: string | null; // ISO (null = estación actual, aún en curso)
+  personaACargo: string | null;
+}
+
+/** Reconstruye el historial de un proyecto desde sus fechas de entrada (Notion). */
+function buildHistorial(p: Proyecto): HistorialEntry[] {
+  const items = (Object.entries(p.entradas) as [EstadoProyecto, string][])
+    .filter(([, fecha]) => !!fecha)
+    .sort((x, y) => new Date(x[1]).getTime() - new Date(y[1]).getTime());
+  return items.map(([estacion, inicio], i) => {
+    const siguiente = items[i + 1];
+    const esActual = !siguiente && estacion === p.estado;
+    return {
+      estacion,
+      inicio,
+      fin: siguiente ? siguiente[1] : null,
+      personaACargo: esActual ? p.personaACargo : null,
+    };
+  });
 }
 
 // ---------- Configuración visual de estaciones ----------
@@ -87,18 +102,33 @@ const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString("es-CO", { day: "2-digit", month: "short", year: "numeric" }) : "Sin información";
 const fmtDateTime = (s: string | null) =>
   s
-    ? new Date(s).toLocaleString("es-CO", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
+    ? new Date(s).toLocaleString("es-CO", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Bogota" })
     : "Sin información";
 
-function elapsedText(fromISO: string | null, toISO?: string) {
+function elapsedText(fromISO: string | null, toISO?: string, nowTime?: Date) {
   if (!fromISO) return "Sin información";
   const from = new Date(fromISO).getTime();
-  const to = toISO ? new Date(toISO).getTime() : Date.now();
-  const mins = Math.max(0, Math.round((to - from) / 60000));
+  const to = toISO ? new Date(toISO).getTime() : (nowTime ? nowTime.getTime() : Date.now());
+  const totalSecs = Math.max(0, Math.round((to - from) / 1000));
+
+  // Mostrar segundos si es menos de 1 minuto, para que el contador sea más dinámico
+  if (totalSecs < 60) {
+    return `${totalSecs}s`;
+  }
+
+  const mins = Math.floor(totalSecs / 60);
+  const secs = totalSecs % 60;
   const h = Math.floor(mins / 60);
   const m = mins % 60;
-  if (h >= 24) return `${Math.floor(h / 24)}d ${h % 24}h`;
-  return `${h}h ${m}m`;
+
+  if (h >= 24) {
+    const d = Math.floor(h / 24);
+    return `${d}d ${h % 24}h ${m}m`;
+  }
+  if (h > 0) {
+    return `${h}h ${m}m`;
+  }
+  return `${m}m ${secs}s`;
 }
 
 function isDelayed(p: Proyecto) {
@@ -136,6 +166,23 @@ function PrioridadBadge({ prioridad, size = "sm" }: { prioridad: string; size?: 
   );
 }
 
+// ---------- Helper: mapear estación a propiedad de entrada en Notion ----------
+function getEntradaPropertyKey(estado: EstadoProyecto): keyof Proyecto | null {
+  const map: Record<EstadoProyecto, keyof Proyecto | null> = {
+    "Diseño": "entradaDiseño",
+    "Corte": "entradaCorte",
+    "Doblez": "entradaDoblez",
+    "Soldadura": "entradaSoldadura",
+    "Pintura": "entradaPintura",
+    "Ensamblaje": "entradaEnsamblaje",
+    "Refrigeración": "entradaRefrigeración",
+    "Eléctrica": "entradaEléctrica",
+    "Finalizado": "entradaFinalizado",
+    "Sin empezar": null,
+  };
+  return map[estado];
+}
+
 // ---------- Reloj ----------
 function useNow(intervalMs = 1000) {
   const [now, setNow] = useState<Date | null>(null);
@@ -154,12 +201,14 @@ function ProyectoCard({
   onHistorial,
   updating = false,
   tv = false,
+  now = null,
 }: {
   p: Proyecto;
   onCompletar: (p: Proyecto) => void;
   onHistorial: (p: Proyecto) => void;
   updating?: boolean;
   tv?: boolean;
+  now?: Date | null;
 }) {
   const delayed = isDelayed(p);
   const pct = progressPct(p);
@@ -206,7 +255,7 @@ function ProyectoCard({
         </div>
         <div className="flex items-center gap-1.5 text-muted-foreground">
           <Clock className={`shrink-0 ${tv ? "h-5 w-5" : "h-4 w-4"}`} />
-          <span className="truncate">En estación: {elapsedText(p.entradaAEstacion)}</span>
+          <span className="truncate">En estación: {elapsedText(p.entradaAEstacion, undefined, now ?? undefined)}</span>
         </div>
         <div className="flex items-center gap-1.5 text-muted-foreground">
           <CalendarDays className={`shrink-0 ${tv ? "h-5 w-5" : "h-4 w-4"}`} />
@@ -285,12 +334,14 @@ function KanbanColumn({
   onCompletar,
   onHistorial,
   updatingId,
+  now = null,
 }: {
   estacion: { id: EstadoProyecto; label: string; icon: typeof Scissors; color: string };
   proyectos: Proyecto[];
   onCompletar: (p: Proyecto) => void;
   onHistorial: (p: Proyecto) => void;
   updatingId: string | null;
+  now?: Date | null;
 }) {
   const Icon = estacion.icon;
   const activos = proyectos.length;
@@ -354,6 +405,7 @@ function KanbanColumn({
               onCompletar={onCompletar}
               onHistorial={onHistorial}
               updating={updatingId === p.notionPageId}
+              now={now}
             />
           ))
         )}
@@ -430,13 +482,73 @@ function HistorialModal({
   onClose: () => void;
 }) {
   if (!proyecto) return null;
+
+  // Construir historial desde las fechas de entrada guardadas en Notion
+  const construirHistorialDesdeNotion = (): Array<{
+    estacion: EstadoProyecto;
+    inicio: string | null;
+    fin: string | null;
+    personaACargo?: string | null;
+  }> => {
+    const estaciones: EstadoProyecto[] = [
+      "Diseño",
+      "Corte",
+      "Doblez",
+      "Soldadura",
+      "Pintura",
+      "Ensamblaje",
+      "Refrigeración",
+      "Eléctrica",
+      "Finalizado",
+    ];
+
+    const propiedades: Array<[EstadoProyecto, keyof Proyecto]> = [
+      ["Diseño", "entradaDiseño"],
+      ["Corte", "entradaCorte"],
+      ["Doblez", "entradaDoblez"],
+      ["Soldadura", "entradaSoldadura"],
+      ["Pintura", "entradaPintura"],
+      ["Ensamblaje", "entradaEnsamblaje"],
+      ["Refrigeración", "entradaRefrigeración"],
+      ["Eléctrica", "entradaEléctrica"],
+      ["Finalizado", "entradaFinalizado"],
+    ];
+
+    const historialDesdeNotion: Array<{
+      estacion: EstadoProyecto;
+      inicio: string | null;
+      fin: string | null;
+    }> = [];
+
+    for (let i = 0; i < propiedades.length; i++) {
+      const [estacion, prop] = propiedades[i];
+      const inicio = (proyecto[prop] as string | null) ?? null;
+
+      if (inicio) {
+        // La fecha de fin es la fecha de inicio de la siguiente estación
+        const siguienteIndex = i + 1;
+        const fin =
+          siguienteIndex < propiedades.length
+            ? ((proyecto[propiedades[siguienteIndex][1]] as string | null) ?? null)
+            : null;
+
+        historialDesdeNotion.push({ estacion, inicio, fin });
+      }
+    }
+
+    return historialDesdeNotion;
+  };
+
+  const historialNotion = construirHistorialDesdeNotion();
+  const tieneHistorial = historialNotion.length > 0;
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4 backdrop-blur-sm">
       <div className="w-full max-w-lg rounded-3xl bg-card p-6 shadow-2xl">
         <div className="mb-4 flex items-start justify-between">
           <div>
             <div className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
-              Historial del proyecto (solo esta sesión)
+              Historial del proyecto
             </div>
             <h3 className="mt-1 font-mono text-lg font-bold text-foreground">
               {formatProjectCode(proyecto.codigoProyecto)}
@@ -455,18 +567,17 @@ function HistorialModal({
         </div>
 
         <div className="mb-4 rounded-xl border border-dashed border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
-          Notion solo almacena la estación actual ("Estado") y el momento en que el
-          proyecto entró a ella ("Entrada a estación"). Este historial completo se
-          reconstruye localmente durante esta sesión y no queda guardado en Notion.
+          Historial guardado en Notion. Cada fecha registra cuándo el proyecto entró a
+          esa estación. Los datos se obtienen al cargar la página desde tu base de datos.
         </div>
 
-        {historial.length === 0 ? (
+        {!tieneHistorial ? (
           <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-            Aún no hay eventos registrados en esta sesión para este proyecto.
+            Este proyecto aún no tiene fechas de entrada registradas en Notion.
           </div>
         ) : (
           <ol className="relative space-y-4 border-l-2 border-border pl-5">
-            {historial.map((h, i) => {
+            {historialNotion.map((h, i) => {
               const est = estacionConfig(h.estacion);
               const Icon = est.icon;
               return (
@@ -481,9 +592,11 @@ function HistorialModal({
                     <div className="font-bold text-foreground">{est.label}</div>
                     <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
                       <div>Inicio: <span className="text-foreground">{fmtDateTime(h.inicio)}</span></div>
-                      <div>Fin: <span className="text-foreground">{fmtDateTime(h.fin)}</span></div>
-                      <div>Tiempo: <span className="text-foreground">{h.inicio ? elapsedText(h.inicio, h.fin) : "Sin información"}</span></div>
-                      <div className="col-span-2">Persona a cargo: <span className="text-foreground">{orSinInformacion(h.personaACargo)}</span></div>
+                      <div>Fin: <span className="text-foreground">{h.fin ? fmtDateTime(h.fin) : "En curso"}</span></div>
+                      <div>Tiempo: <span className="text-foreground">{h.inicio ? elapsedText(h.inicio, h.fin ?? undefined) : "Sin información"}</span></div>
+                      {h.personaACargo !== null && (
+                        <div className="col-span-2">Persona a cargo: <span className="text-foreground">{orSinInformacion(h.personaACargo)}</span></div>
+                      )}
                     </div>
                   </div>
                 </li>
@@ -789,9 +902,6 @@ export function FrozzMes() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
 
-  // Historial local de sesión: notionPageId -> eventos. NO viene de Notion.
-  const [historialLocal, setHistorialLocal] = useState<Record<string, HistorialEntry[]>>({});
-
   const [vista, setVista] = useState<Vista>("general");
   const [estacionSel, setEstacionSel] = useState<EstadoProyecto>("Diseño");
   const [prioridad, setPrioridad] = useState<string>("all");
@@ -807,7 +917,11 @@ export function FrozzMes() {
   const [undoState, setUndoState] = useState<{
     notionPageId: string;
     prevEstado: EstadoProyecto;
+    estacionNueva: EstadoProyecto;
     prevEntradaAEstacion: string | null;
+    prevEntradaSiguiente: string | null; // Fecha anterior de la estación siguiente
+    siguienteEstacion: EstadoProyecto;
+    prevTiempoPorEstacion: string;
     msg: string;
     at: number;
   } | null>(null);
@@ -904,9 +1018,21 @@ export function FrozzMes() {
       setConfirmProyecto(null);
       return;
     }
-    const ahora = new Date().toISOString();
+
+    const ahora = nowBogotaISO();
     const prevEstado = p.estado;
-    const prevEntradaAEstacion = p.entradaAEstacion;
+    const prevEntradaAEstacion = p.entradas[p.estado] ?? p.entradaAEstacion;
+
+    // Obtener la propiedad de entrada de la siguiente estación
+    const siguienteKey = getEntradaPropertyKey(siguiente);
+    if (!siguienteKey) {
+      setActionError("No se puede completar desde esta estación");
+      setConfirmProyecto(null);
+      return;
+    }
+
+    // Guardar fecha anterior de la siguiente estación para deshacer
+    const prevEntradaSiguiente = (p[siguienteKey] as string | null) ?? null;
 
     setUpdatingId(p.notionPageId);
     try {
@@ -917,30 +1043,47 @@ export function FrozzMes() {
           notionPageId: p.notionPageId,
           estado: siguiente,
           entradaAEstacion: ahora,
+          // Se guarda la fecha y hora de entrada a la nueva estación en su columna de Notion.
+          entradas: { [siguiente]: ahora },
         }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body?.message || "Failed to update project");
       }
+      const resBody = await res.json().catch(() => ({}));
+      const missingColumns: string[] = resBody?.missingColumns ?? [];
+      if (missingColumns.length > 0) {
+        setActionError(
+          `El proyecto avanzó, pero en Notion falta la columna "Entrada a ${missingColumns.join(", ")}" (tipo Fecha), por eso esa fecha no se guardó.`,
+        );
+      }
 
-      // Solo se considera exitosa la actualización una vez Notion confirma.
+      // Actualizar estado local
       setProyectos((prev) =>
-        prev.map((x) =>
-          x.notionPageId === p.notionPageId ? { ...x, estado: siguiente, entradaAEstacion: ahora } : x,
-        ),
+        prev.map((x) => {
+          if (x.notionPageId === p.notionPageId) {
+            const updated = {
+              ...x,
+              estado: siguiente,
+              entradaAEstacion: ahora,
+              entradas: { ...x.entradas, [siguiente]: ahora },
+            };
+            (updated as any)[siguienteKey] = ahora;
+            return updated;
+          }
+          return x;
+        }),
       );
-      setHistorialLocal((prev) => ({
-        ...prev,
-        [p.notionPageId]: [
-          ...(prev[p.notionPageId] ?? []),
-          { estacion: prevEstado, inicio: prevEntradaAEstacion, fin: ahora, personaACargo: p.personaACargo },
-        ],
-      }));
+
       setUndoState({
         notionPageId: p.notionPageId,
         prevEstado,
+        estacionNueva: siguiente,
         prevEntradaAEstacion,
+        prevEntradaSiguiente,
+        siguienteEstacion: siguiente,
+        prevTiempoPorEstacion: p.tiempoPorEstacion,
         msg:
           siguiente === "Finalizado"
             ? `${formatProjectCode(p.codigoProyecto)} finalizado correctamente.`
@@ -959,6 +1102,18 @@ export function FrozzMes() {
     if (!undoState) return;
     setUndoing(true);
     try {
+      const siguienteKey = getEntradaPropertyKey(undoState.siguienteEstacion);
+      if (!siguienteKey) {
+        throw new Error("No se puede deshacer: estación no válida");
+      }
+
+      const updateData: any = {
+        notionPageId: undoState.notionPageId,
+        estado: undoState.prevEstado,
+        entradaAEstacion: undoState.prevEntradaAEstacion,
+        [siguienteKey]: undoState.prevEntradaSiguiente, // Restaurar fecha anterior
+      };
+
       const res = await fetch("/api/notion/update", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -966,23 +1121,35 @@ export function FrozzMes() {
           notionPageId: undoState.notionPageId,
           estado: undoState.prevEstado,
           entradaAEstacion: undoState.prevEntradaAEstacion,
+          tiempoPorEstacion: undoState.prevTiempoPorEstacion,
+          // Se borra la fecha de entrada de la estación a la que se había avanzado.
+          entradas: { [undoState.estacionNueva]: null },
         }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body?.message || "Failed to undo update");
       }
+
       setProyectos((prev) =>
-        prev.map((x) =>
-          x.notionPageId === undoState.notionPageId
-            ? { ...x, estado: undoState.prevEstado, entradaAEstacion: undoState.prevEntradaAEstacion }
-            : x,
-        ),
+        prev.map((x) => {
+          if (x.notionPageId === undoState.notionPageId) {
+            const entradas = { ...x.entradas };
+            delete entradas[undoState.estacionNueva];
+            const updated = {
+              ...x,
+              estado: undoState.prevEstado,
+              entradaAEstacion: undoState.prevEntradaAEstacion ?? entradas[undoState.prevEstado] ?? null,
+              tiempoPorEstacion: undoState.prevTiempoPorEstacion,
+              entradas,
+            };
+            (updated as any)[siguienteKey] = undoState.prevEntradaSiguiente;
+            return updated;
+          }
+          return x;
+        }),
       );
-      setHistorialLocal((prev) => {
-        const list = prev[undoState.notionPageId] ?? [];
-        return { ...prev, [undoState.notionPageId]: list.slice(0, -1) };
-      });
+
       setUndoState(null);
     } catch (err: any) {
       setActionError(err?.message ? `No se pudo deshacer en Notion: ${err.message}` : "No se pudo deshacer en Notion.");
@@ -1076,6 +1243,7 @@ export function FrozzMes() {
                   onCompletar={handleCompletarClick}
                   onHistorial={() => {}}
                   updating={updatingId === p.notionPageId}
+                  now={now}
                 />
               ))}
             </div>
@@ -1255,6 +1423,7 @@ export function FrozzMes() {
                     onCompletar={handleCompletarClick}
                     onHistorial={setHistorialProyecto}
                     updatingId={updatingId}
+                    now={now}
                   />
                 ))}
               </div>
@@ -1271,6 +1440,7 @@ export function FrozzMes() {
                       onCompletar={handleCompletarClick}
                       onHistorial={setHistorialProyecto}
                       updating={updatingId === p.notionPageId}
+                      now={now}
                     />
                   ))}
                 {filtrados.filter((p) => p.estado === estacionSel).length === 0 && (
@@ -1294,7 +1464,7 @@ export function FrozzMes() {
       />
       <HistorialModal
         proyecto={historialProyecto}
-        historial={historialProyecto ? historialLocal[historialProyecto.notionPageId] ?? [] : []}
+        historial={historialProyecto ? buildHistorial(historialProyecto) : []}
         onClose={() => setHistorialProyecto(null)}
       />
       <UndoToast
