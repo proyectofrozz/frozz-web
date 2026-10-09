@@ -11,10 +11,35 @@
 // produce un 404 en producción aunque el archivo exista.
 
 import { createFileRoute } from '@tanstack/react-router';
-import { buildNotionPropertiesPayload, type ProyectoUpdateFields } from '@/lib/notion/mapper';
+import { buildNotionPropertiesPayload, ENTRADA_PROPS, type ProyectoUpdateFields } from '@/lib/notion/mapper';
 
 interface UpdateProjectRequest extends ProyectoUpdateFields {
   notionPageId: string;
+}
+
+// Nombres reales de las columnas de tipo Date de la base de datos (cache en
+// memoria). Se consultan una sola vez al schema de Notion para encontrar las
+// columnas "Entrada a Diseño", "Entrada a Corte", etc. sin depender de
+// mayúsculas o acentos exactos.
+let dateColumnsCache: { names: string[]; at: number } | null = null;
+
+async function getDateColumnNames(token: string, databaseId: string): Promise<string[]> {
+  if (dateColumnsCache && Date.now() - dateColumnsCache.at < 5 * 60 * 1000) {
+    return dateColumnsCache.names;
+  }
+  const res = await fetch(`https://api.notion.com/v1/databases/${databaseId}`, {
+    headers: { Authorization: `Bearer ${token}`, 'Notion-Version': '2022-06-28' },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`No se pudo leer el esquema de Notion: ${err.message ?? res.status}`);
+  }
+  const db = await res.json();
+  const names = Object.entries<any>(db.properties ?? {})
+    .filter(([, prop]) => prop?.type === 'date')
+    .map(([name]) => name);
+  dateColumnsCache = { names, at: Date.now() };
+  return names;
 }
 
 export const Route = createFileRoute('/api/notion/update')({
@@ -44,7 +69,47 @@ export const Route = createFileRoute('/api/notion/update')({
             );
           }
 
-          const properties = buildNotionPropertiesPayload(updates);
+          let datePropNames: string[] = [];
+          if (updates.entradas && Object.keys(updates.entradas).length > 0) {
+            const databaseId = process.env.NOTION_DATABASE_ID;
+            if (!databaseId) {
+              return new Response(
+                JSON.stringify({ error: 'Missing NOTION_DATABASE_ID' }),
+                { status: 400, headers: { 'Content-Type': 'application/json' } },
+              );
+            }
+            // Primero usamos el contrato explícito de la base FROZZ.
+            // Esto evita que una diferencia de versión/schema de la API de Notion
+            // haga que una columna Date existente sea reportada como inexistente.
+            datePropNames = Object.values(ENTRADA_PROPS);
+
+            // Intentamos además leer el schema para detectar instalaciones donde
+            // alguna columna haya sido renombrada. Si falla, conservamos los nombres
+            // canónicos anteriores en vez de bloquear una operación válida.
+            if (databaseId) {
+              try {
+                const discovered = await getDateColumnNames(notionToken, databaseId);
+                datePropNames = Array.from(new Set([...datePropNames, ...discovered]));
+              } catch (schemaError) {
+                console.warn('No se pudo leer el schema de Notion; se usarán nombres canónicos de Entrada a estación:', schemaError);
+              }
+            }
+          }
+
+          const { properties, missing } = buildNotionPropertiesPayload(updates, datePropNames);
+
+          // Nunca hacer un PATCH parcial: si falta una columna de entrada,
+          // se rechaza toda la operación antes de tocar Estado/Tiempo.
+          if (missing.length > 0) {
+            return new Response(
+              JSON.stringify({
+                error: 'Missing station date columns',
+                message: `Faltan en Notion las columnas de entrada: ${missing.join(', ')}`,
+                missingColumns: missing,
+              }),
+              { status: 400, headers: { 'Content-Type': 'application/json' } },
+            );
+          }
 
           if (Object.keys(properties).length === 0) {
             return new Response(
@@ -78,6 +143,8 @@ export const Route = createFileRoute('/api/notion/update')({
               success: true,
               message: 'Project updated successfully',
               notionPageId: updated.id,
+              // Estaciones cuya columna "Entrada a ..." no existe en Notion.
+              missingColumns: missing,
             }),
             { status: 200, headers: { 'Content-Type': 'application/json' } },
           );
