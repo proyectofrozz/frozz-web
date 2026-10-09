@@ -211,7 +211,6 @@ export function isWithinWorkday(date: Date = new Date()): boolean {
   const minutes = hour * 60 + minute;
   return minutes >= 8 * 60 && minutes < 17 * 60;
 }
-}
 
 function getRichText(prop: any): string {
   if (!prop || !Array.isArray(prop.rich_text)) return "";
@@ -349,13 +348,6 @@ export function buildNotionPropertiesPayload(
   if (updates.entradaAEstacion !== undefined) {
     properties[NOTION_PROPS.entradaAEstacion] = {
       date: updates.entradaAEstacion ? { start: updates.entradaAEstacion } : null,
-    };
-  }
-  if (updates.tiempoPorEstacion !== undefined) {
-    properties[NOTION_PROPS.tiempoPorEstacion] = {
-      rich_text: updates.tiempoPorEstacion ? [{ text: { content: updates.tiempoPorEstacion } }] : [],
-    };
-  }
     };
   }
   if (updates.tiempoPorEstacion !== undefined) {

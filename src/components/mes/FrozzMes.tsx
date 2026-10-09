@@ -1116,12 +1116,6 @@ export function FrozzMes() {
         );
       }
 
-      const resBody = await res.json().catch(() => ({}));
-      const missingColumns: string[] = resBody?.missingColumns ?? [];
-      if (missingColumns.length > 0) {
-        throw new Error(`La estación avanzó, pero Notion no tiene la columna de fecha para: ${missingColumns.join(", ")}.`);
-      }
-
       // Actualización inmediata de la interfaz.
       setProyectos((prev) =>
         prev.map((x) =>
@@ -1155,8 +1149,6 @@ export function FrozzMes() {
         prevEntradaSiguiente,
         prevTiempoPorEstacion,
         msg: `${formatProjectCode(current.codigoProyecto)} → ${estacionConfig(siguiente).label}. Tiempo guardado: ${tiempoEstacion}`,
-        at: Date.now(),
-      });
         at: Date.now(),
       });
     } catch (err: any) {
@@ -1242,6 +1234,9 @@ export function FrozzMes() {
             (updated as any)[siguienteKey] = snapshot.prevEntradaSiguiente;
           }
           return updated;
+        })
+      );
+
       setUndoState(null);
     } catch (err: any) {
       setActionError(err?.message || "No se pudo deshacer en Notion.");
