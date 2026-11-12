@@ -46,8 +46,6 @@ export const NOTION_PROPS = {
   avance: "Avance",
   prioridad: "Prioridad",
   // Columna antigua (opcional). Solo se usa como respaldo de lectura.
-  entradaAEstacionLegacy: "Entrada a estación",
-  entradaAEstacion: "Entrada a estación",
   tiempoPorEstacion: "Tiempo por estación",
 } as const;
 
@@ -249,8 +247,7 @@ export function mapNotionPageToProyecto(page: any): Proyecto {
     estado: estadoActual,
     avance: getNumber(props[NOTION_PROPS.avance]) ?? 0,
     prioridad: getSelect(props[NOTION_PROPS.prioridad]),
-    entradaAEstacion:
-      entradas[estadoActual] ?? getDate(props[NOTION_PROPS.entradaAEstacionLegacy]),
+    entradaAEstacion: entradas[estadoActual] ?? null,
     entradas,
     tiempoPorEstacion: getRichText(props[NOTION_PROPS.tiempoPorEstacion]),
     entradaDiseño: entradas["Diseño"] ?? null,
@@ -355,11 +352,7 @@ export function buildNotionPropertiesPayload(
     }
   }
 
-  if (updates.entradaAEstacion !== undefined) {
-    properties[NOTION_PROPS.entradaAEstacion] = {
-      date: updates.entradaAEstacion ? { start: updates.entradaAEstacion } : null,
-    };
-  }
+  
 
   return { properties, missing };
 }
