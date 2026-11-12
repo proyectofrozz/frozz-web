@@ -287,9 +287,12 @@ export function mapNotionPageToProyecto(page: any): Proyecto {
   return proyecto;
 }
 
-export function formatProjectCode(codigo: number | null | undefined): string {
-  if (codigo === null || codigo === undefined || Number.isNaN(codigo)) return "Sin información";
-  return `PRJ - ${String(codigo).padStart(3, "0")}`;
+export function formatProjectCode(codigo: string | number | null | undefined): string {
+  if (codigo === null || codigo === undefined || String(codigo).trim() === "") {
+    return "Sin información";
+  }
+  const str = String(codigo).trim();
+  return str.startsWith("PRJ") ? str : `PRJ - ${str}`;
 }
 
 export function orSinInformacion(value: string | null | undefined): string {
