@@ -209,7 +209,16 @@ function getStatus(prop: any): string {
 }
 
 function getNumber(prop: any): number | null {
-  return typeof prop?.number === "number" ? prop.number : null;
+  if (!prop) return null;
+  if (typeof prop.number === "number") return prop.number;
+  if (prop.formula) {
+    if (typeof prop.formula.number === "number") return prop.formula.number;
+    if (typeof prop.formula.string === "string") {
+      const n = parseFloat(prop.formula.string.replace(/[^0-9.\-]/g, ""));
+      return Number.isFinite(n) ? n : null;
+    }
+  }
+  return null;
 }
 
 function getDate(prop: any): string | null {
