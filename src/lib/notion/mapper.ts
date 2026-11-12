@@ -195,6 +195,10 @@ function getRichText(prop: any): string {
   if (!prop || !Array.isArray(prop.rich_text)) return "";
   return prop.rich_text.map((t: any) => t?.plain_text ?? "").join("");
 }
+function getTitle(prop: any): string {
+  if (!prop || !Array.isArray(prop.title)) return "";
+  return prop.title.map((t: any) => t?.plain_text ?? "").join("");
+}
 
 function getSelect(prop: any): string {
   return prop?.select?.name ?? "";
@@ -232,13 +236,11 @@ export function mapNotionPageToProyecto(page: any): Proyecto {
   }
 
   // ID Proyecto puede ser Number o Text en Notion; se acepta cualquiera de los dos.
-  const codigoNumero = getNumber(props[NOTION_PROPS.codigoProyecto]);
-  const codigoTexto = getRichText(props[NOTION_PROPS.codigoProyecto]);
 
   const proyecto: Proyecto = {
     id: page.id,
     notionPageId: page.id,
-    codigoProyecto: codigoNumero !== null ? String(codigoNumero) : codigoTexto || null,
+    codigoProyecto: getTitle(props[NOTION_PROPS.codigoProyecto]) || null,
     equipo: getRichText(props[NOTION_PROPS.equipo]),
     cliente: getRichText(props[NOTION_PROPS.cliente]),
     personaACargo: getSelect(props[NOTION_PROPS.personaACargo]),
@@ -304,11 +306,11 @@ export function buildNotionPropertiesPayload(
   const properties: Record<string, any> = {};
   const missing: EstadoProyecto[] = [];
 
-  if (updates.codigoProyecto !== undefined) {
-    properties[NOTION_PROPS.codigoProyecto] = {
-      number: updates.codigoProyecto ? Number(updates.codigoProyecto) : null,
-    };
-  }
+if (updates.codigoProyecto !== undefined) {
+  properties[NOTION_PROPS.codigoProyecto] = {
+    title: updates.codigoProyecto ? [{ text: { content: String(updates.codigoProyecto) } }] : [],
+  };
+}
   if (updates.equipo !== undefined) {
     properties[NOTION_PROPS.equipo] = { rich_text: updates.equipo ? [{ text: { content: updates.equipo } }] : [] };
   }
