@@ -1005,246 +1005,184 @@ export function FrozzMes() {
 
   // ---------- Web → Notion: finalizar estación ----------
   const doCompletar = async () => {
-    if (!confirmProyecto) return;
+  if (!confirmProyecto) return;
 
-    const p = confirmProyecto;
-    const siguiente = SIGUIENTE_ESTADO[p.estado];
-    if (!siguiente) {
-      setConfirmProyecto(null);
-      return;
+  const p = confirmProyecto;
+  const siguiente = SIGUIENTE_ESTADO[p.estado];
+  if (!siguiente) {
+    setConfirmProyecto(null);
+    return;
+  }
+
+  const ahoraDate = new Date();
+  if (!isWithinWorkday(ahoraDate)) {
+    setActionError("Solo se pueden guardar tiempos entre 8:00 AM y 5:00 PM (hora de Bogotá).");
+    setConfirmProyecto(null);
+    return;
+  }
+
+  setUpdatingId(p.notionPageId);
+  try {
+    // 1) Leer el estado actual desde Notion
+    const currentRes = await fetch(`/api/notion/read?notionPageId=${encodeURIComponent(p.notionPageId)}`, {
+      cache: "no-store",
+    });
+    if (!currentRes.ok) {
+      const body = await currentRes.json().catch(() => ({}));
+      throw new Error(body?.message || "No se pudo leer el proyecto desde Notion.");
+    }
+    const current: Proyecto = (await currentRes.json()).proyecto;
+    if (!current) throw new Error("Notion no devolvió el proyecto.");
+
+    // 2) Si otro usuario ya cambió la estación, no sobrescribir
+    if (current.estado !== p.estado) {
+      await fetchProyectos();
+      throw new Error(`El proyecto ya cambió de estación en Notion (${current.estado}). Se recargó la información.`);
     }
 
-    const ahoraDate = new Date();
-    if (!isWithinWorkday(ahoraDate)) {
-      setActionError("Solo se pueden guardar tiempos entre 8:00 AM y 5:00 PM (hora de Bogotá).");
-      setConfirmProyecto(null);
-      return;
+    // 3) Fecha de entrada real a la estación actual
+    const entradaActual = current.entradas[current.estado] ?? null;
+    if (!entradaActual && current.estado !== "Sin empezar") {
+      throw new Error(
+        `No existe la fecha de entrada a ${current.estado} en Notion. No se guardó el tiempo para evitar registrar un valor incorrecto.`,
+      );
     }
 
     const ahora = nowBogotaISO(ahoraDate);
-    const prevEstado = p.estado;
-    const prevEntradaAEstacion = p.entradas[p.estado] ?? p.entradaAEstacion;
-
-    // Obtener la propiedad de entrada de la siguiente estación
-    const siguienteKey = getEntradaPropertyKey(siguiente);
-    if (!siguienteKey) {
-      setActionError("No se puede completar desde esta estación");
-      setConfirmProyecto(null);
-      return;
+    const inicioMs = entradaActual ? new Date(entradaActual).getTime() : NaN;
+    const finMs = new Date(ahora).getTime();
+    if (entradaActual && (!Number.isFinite(inicioMs) || finMs < inicioMs)) {
+      throw new Error("La fecha de entrada de la estación no es válida. No se guardó el tiempo.");
     }
-    // Guardar fecha anterior de la siguiente estación para deshacer
-    const prevEntradaSiguiente = (p[siguienteKey] as string | null) ?? p.entradas[siguiente] ?? null;
 
-    setUpdatingId(p.notionPageId);
-    try {
-      // 1) Leer de nuevo Notion antes de guardar. Esto evita acumular sobre datos viejos
-      // y detecta si otro usuario ya avanzó el proyecto.
-      const currentRes = await fetch(`/api/notion/read?notionPageId=${encodeURIComponent(p.notionPageId)}`, {
-        cache: "no-store",
-      });
-      if (!currentRes.ok) {
-        const body = await currentRes.json().catch(() => ({}));
-        throw new Error(body?.message || "No se pudo leer el proyecto desde Notion.");
-      }
-      const currentBody = await currentRes.json();
-      const current: Proyecto = currentBody.proyecto;
-      if (!current) throw new Error("Notion no devolvió el proyecto.");
+    // 4) Tiempo acumulado
+    const minutos = entradaActual ? Math.max(0, Math.floor((finMs - inicioMs) / 60000)) : 0;
+    const tiempoEstacion = `${Math.floor(minutos / 60)}h ${String(minutos % 60).padStart(2, "0")}m`;
+    const nuevoRegistro = `${estacionConfig(current.estado).label}: ${tiempoEstacion}`;
+    const prevTiempoPorEstacion = current.tiempoPorEstacion?.trim() ?? "";
+    const tiempoAcumulado = prevTiempoPorEstacion ? `${prevTiempoPorEstacion} | ${nuevoRegistro}` : nuevoRegistro;
 
-      // 2) Validar que el proyecto siga en la misma estación. Evita duplicados accidentales.
-      if (current.estado !== p.estado) {
-        await fetchProyectos();
-        throw new Error(`El proyecto ya cambió de estación en Notion (${current.estado}). Se recargó la información.`);
-      }
+    // 5) Guardar la fecha previa de la siguiente estación para Deshacer
+    const prevEntradaSiguiente = current.entradas[siguiente] ?? null;
 
-      const entrada = current.entradas[current.estado] ?? current.entradaAEstacion;
-      const ahora = nowBogotaISO(ahoraDate);
-      if (!entrada && current.estado !== "Sin empezar") {
-        throw new Error(`No existe la fecha de entrada a ${current.estado} en Notion. No se guardó el tiempo para evitar registrar un valor incorrecto.`);
-      }
-
-      // 3) Calcular duración usando la fecha de entrada REAL de Notion.
-      const inicioMs = entrada ? new Date(entrada).getTime() : NaN;
-      const finMs = new Date(ahora).getTime();
-      if (entrada && (!Number.isFinite(inicioMs) || !Number.isFinite(finMs) || finMs < inicioMs)) {
-        throw new Error("La fecha de entrada de la estación no es válida. No se guardó el tiempo.");
-      }
-
-      const minutos = entrada ? Math.max(0, Math.floor((finMs - inicioMs) / 60000)) : 0;
-      const horas = Math.floor(minutos / 60);
-      const minutosRestantes = minutos % 60;
-      const tiempoEstacion = `${horas}h ${String(minutosRestantes).padStart(2, "0")}m`;
-      const estacionLabel = estacionConfig(current.estado).label;
-      const nuevoRegistro = `${estacionLabel}: ${tiempoEstacion}`;
-
-      // 4) Leer el acumulado actual de Notion y concatenar el nuevo registro.
-      const prevTiempoPorEstacion = current.tiempoPorEstacion?.trim() ?? "";
-      const tiempoAcumulado = prevTiempoPorEstacion
-        ? `${prevTiempoPorEstacion} | ${nuevoRegistro}`
-        : nuevoRegistro;
-
-      // 5) Guardar la fecha previa de la siguiente estación para poder hacer CTRL+Z.
-      const prevEntradaSiguiente = current.entradas[siguiente] ?? null;
-      const prevEntradaAEstacion = current.entradas[current.estado] ?? current.entradaAEstacion;
-
-      // 6) Escribir: estado nuevo + entrada a la siguiente estación + acumulado.
-      const res = await fetch("/api/notion/update", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          notionPageId: current.notionPageId,
-          estado: siguiente,
-          entradaAEstacion: ahora,
-          notionPageId: current.notionPageId,
-          estado: siguiente,
-          entradaAEstacion: ahora,
-          // Se guarda la fecha y hora de entrada a la nueva estación en su columna de Notion
-          tiempoPorEstacion: tiempoAcumulado,
-          entradas: { [siguiente]: ahora },
-          entradas: { [siguiente]: ahora },
-        }),
-      });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.message || "No se pudo guardar en Notion.");
-      }
-      const resBody = await res.json().catch(() => ({}));
-      const missingColumns: string[] = resBody?.missingColumns ?? [];
-      if (missingColumns.length > 0) {
-        setActionError(
-          `El proyecto avanzó, pero en Notion falta la columna "Entrada a ${missingColumns.join(", ")}" (tipo Fecha), por eso esa fecha no se guardó.`,
-        );
-      }
-
-      // Actualización inmediata de la interfaz.
-      setProyectos((prev) =>
-        prev.map((x) =>
-          x.notionPageId === current.notionPageId
-            ? {
-                ...x,
-                estado: siguiente,
-                entradaAEstacion: ahora,
-                tiempoPorEstacion: tiempoAcumulado,
-                entradas: { ...x.entradas, [siguiente]: ahora },
-              }
-            : x,
-        ),
-      );
-
-      // Reconstruir historial desde Notion
-      setHistorialLocal((prev) => ({
-        ...prev,
-        [p.notionPageId]: [
-          ...(prev[p.notionPageId] ?? []),
-          { estacion: prevEstado, inicio: prevEntradaAEstacion, fin: ahora, personaACargo: p.personaACargo },
-        ],
-      }));
-
-      // Guardar exactamente el estado anterior para Deshacer.
-      setUndoState({
+    // 6) Escribir en Notion (sin claves duplicadas ni columna legacy)
+    const res = await fetch("/api/notion/update", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
         notionPageId: current.notionPageId,
-        prevEstado: current.estado,
-        estacionNueva: siguiente,
-        prevEntradaAEstacion,
-        prevEntradaSiguiente,
-        prevTiempoPorEstacion,
-        msg: `${formatProjectCode(current.codigoProyecto)} → ${estacionConfig(siguiente).label}. Tiempo guardado: ${tiempoEstacion}`,
-        at: Date.now(),
-      });
-    } catch (err: any) {
-      setActionError(err?.message || "No se pudo actualizar Notion.");
-    } finally {
-      setUpdatingId(null);
-      setConfirmProyecto(null);
-    }
-  };
-
-  // ---------- CTRL+Z / Deshacer ----------
-  const doUndo = async () => {
-    if (!undoState || Date.now() - undoState.at > 30 * 1000) {
-      setUndoState(null);
-      return;
+        estado: siguiente,
+        tiempoPorEstacion: tiempoAcumulado,
+        entradas: { [siguiente]: ahora },
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body?.message || "No se pudo guardar en Notion.");
     }
 
-    const snapshot = undoState;
-    setUndoing(true);
-    try {
-      const siguienteKey = getEntradaPropertyKey(snapshot.siguienteEstacion);
-      if (!siguienteKey) {
-        throw new Error("No se puede deshacer: estación no válida");
-      }
-
-      // Leer Notion antes de deshacer para no pisar un cambio posterior.
-      const currentRes = await fetch(`/api/notion/read?notionPageId=${encodeURIComponent(snapshot.notionPageId)}`, {
-        cache: "no-store",
-      });
-      if (!currentRes.ok) {
-        const body = await currentRes.json().catch(() => ({}));
-        throw new Error(body?.message || "No se pudo leer Notion para deshacer.");
-      }
-      const currentBody = await currentRes.json();
-      const current: Proyecto = currentBody.proyecto;
-      if (!current) throw new Error("Notion no devolvió el proyecto para deshacer.");
-
-      if (current.estado !== snapshot.estacionNueva) {
-        throw new Error("El proyecto cambió después del último guardado. No se puede deshacer sin riesgo de sobrescribir otro cambio.");
-      }
-
-      const updateData: any = {
-        notionPageId: snapshot.notionPageId,
-        estado: snapshot.prevEstado,
-        entradaAEstacion: snapshot.prevEntradaAEstacion,
-        [siguienteKey]: snapshot.prevEntradaSiguiente,
-      };
-      const res = await fetch("/api/notion/update", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          notionPageId: snapshot.notionPageId,
-          estado: snapshot.prevEstado,
-          entradaAEstacion: snapshot.prevEntradaAEstacion,
-          tiempoPorEstacion: snapshot.prevTiempoPorEstacion,
-          // Se restaura la fecha anterior de la estación (o se borra si no existía)
-          entradas: { [snapshot.estacionNueva]: snapshot.prevEntradaSiguiente },
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.message || "No se pudo deshacer en Notion.");
-      }
-
-      setProyectos((prev) =>
-        prev.map((x) => {
-          if (x.notionPageId !== snapshot.notionPageId) return x;
-          const entradas = { ...x.entradas };
-          if (snapshot.prevEntradaSiguiente === null) {
-            delete entradas[snapshot.estacionNueva];
-          } else {
-            entradas[snapshot.estacionNueva] = snapshot.prevEntradaSiguiente;
-          }
-          const updated = {
-            ...x,
-            estado: snapshot.prevEstado,
-            entradaAEstacion: snapshot.prevEntradaAEstacion ?? entradas[snapshot.prevEstado] ?? null,
-            tiempoPorEstacion: snapshot.prevTiempoPorEstacion,
-            entradas,
-          };
-          const siguienteKey = getEntradaPropertyKey(snapshot.estacionNueva);
-          if (siguienteKey) {
-            (updated as any)[siguienteKey] = snapshot.prevEntradaSiguiente;
-          }
-          return updated;
-        })
+    const resBody = await res.json().catch(() => ({}));
+    const missingColumns: string[] = resBody?.missingColumns ?? [];
+    if (missingColumns.length > 0) {
+      setActionError(
+        `El proyecto avanzó, pero en Notion falta la columna "Entrada a ${missingColumns.join(", ")}" (tipo Fecha), por eso esa fecha no se guardó.`,
       );
-
-      setUndoState(null);
-    } catch (err: any) {
-      setActionError(err?.message || "No se pudo deshacer en Notion.");
-    } finally {
-      setUndoing(false);
     }
-  };
 
+    // 7) Actualizar la interfaz
+    setProyectos((prev) =>
+      prev.map((x) =>
+        x.notionPageId === current.notionPageId
+          ? {
+              ...x,
+              estado: siguiente,
+              entradaAEstacion: ahora,
+              tiempoPorEstacion: tiempoAcumulado,
+              entradas: { ...x.entradas, [siguiente]: ahora },
+            }
+          : x,
+      ),
+    );
+
+    // 8) Guardar lo necesario para Deshacer
+    setUndoState({
+      notionPageId: current.notionPageId,
+      prevEstado: current.estado,
+      estacionNueva: siguiente,
+      prevEntradaSiguiente,
+      prevTiempoPorEstacion,
+      msg: `${formatProjectCode(current.codigoProyecto)} → ${estacionConfig(siguiente).label}. Tiempo guardado: ${tiempoEstacion}`,
+      at: Date.now(),
+    });
+  } catch (err: any) {
+    setActionError(err?.message || "No se pudo actualizar Notion.");
+  } finally {
+    setUpdatingId(null);
+    setConfirmProyecto(null);
+  }
+};
+
+const doUndo = async () => {
+  if (!undoState || Date.now() - undoState.at > 30 * 1000) {
+    setUndoState(null);
+    return;
+  }
+
+  const snap = undoState;
+  setUndoing(true);
+  try {
+    const currentRes = await fetch(`/api/notion/read?notionPageId=${encodeURIComponent(snap.notionPageId)}`, {
+      cache: "no-store",
+    });
+    if (!currentRes.ok) {
+      const body = await currentRes.json().catch(() => ({}));
+      throw new Error(body?.message || "No se pudo leer Notion para deshacer.");
+    }
+    const current: Proyecto = (await currentRes.json()).proyecto;
+    if (!current) throw new Error("Notion no devolvió el proyecto para deshacer.");
+
+    if (current.estado !== snap.estacionNueva) {
+      throw new Error("El proyecto cambió después del último guardado. No se puede deshacer sin riesgo de sobrescribir otro cambio.");
+    }
+
+    const res = await fetch("/api/notion/update", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        notionPageId: snap.notionPageId,
+        estado: snap.prevEstado,
+        tiempoPorEstacion: snap.prevTiempoPorEstacion,
+        entradas: { [snap.estacionNueva]: snap.prevEntradaSiguiente },
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body?.message || "No se pudo deshacer en Notion.");
+    }
+
+    setProyectos((prev) =>
+      prev.map((x) => {
+        if (x.notionPageId !== snap.notionPageId) return x;
+        const entradas = { ...x.entradas };
+        if (snap.prevEntradaSiguiente === null) delete entradas[snap.estacionNueva];
+        else entradas[snap.estacionNueva] = snap.prevEntradaSiguiente;
+        return {
+          ...x,
+          estado: snap.prevEstado,
+          entradaAEstacion: entradas[snap.prevEstado] ?? null,
+          tiempoPorEstacion: snap.prevTiempoPorEstacion,
+          entradas,
+        };
+      }),
+    );
+
+    setUndoState(null);
+  } catch (err: any) {
+    setActionError(err?.message || "No se pudo deshacer en Notion.");
+  } finally {
+    setUndoing(false);
+  }
+};
   const dateStr = now
     ? now.toLocaleDateString("es-CO", {
         weekday: "long",
