@@ -223,38 +223,166 @@ function getDate(prop: any): string | null { return prop?.date?.start ?? null; }
 function isEstadoProyecto(value: string): value is EstadoProyecto {
   return (TODAS_LAS_COLUMNAS as string[]).includes(value);
 }
+// src/lib/notion/mapper.ts
+//
+// Capa centralizada de mapping entre Notion y el modelo de datos de la aplicación.
+// Ningún componente ni endpoint debe leer `page.properties[...]` directamente:
+// toda página de Notion debe pasar por `mapNotionPageToProyecto` antes de llegar
+// a React, y toda actualización debe construirse con `buildNotionPropertiesPayload`.
+
+/** Nombres exactos de las propiedades de la base de datos de Notion. */
+export const NOTION_PROPS = {
+  codigoProyecto: "ID Proyecto",
+  equipo: "Equipo",
+  cliente: "Cliente",
+  personaACargo: "Persona a cargo",
+  fechaInicio: "Fecha de inicio",
+  fechaEstimadaEntrega: "Fecha estimada de entrega",
+  estado: "Estado",
+  avance: "Avance",
+  prioridad: "Prioridad",
+  entradaAEstacionLegacy: "Entrada a estación",
+  tiempoPorEstacion: "Tiempo por estación",
+} as const;
+
+export type EstadoProyecto =
+  | "Sin empezar"
+  | "Diseño"
+  | "Corte"
+  | "Doblez"
+  | "Soldadura"
+  | "Pintura"
+  | "Ensamblaje"
+  | "Refrigeración"
+  | "Eléctrica"
+  | "Finalizado";
+
+export const ORDEN_ESTACIONES: EstadoProyecto[] = [
+  "Diseño",
+  "Corte",
+  "Doblez",
+  "Soldadura",
+  "Pintura",
+  "Ensamblaje",
+  "Refrigeración",
+  "Eléctrica",
+  "Finalizado",
+];
+
+export const ESTADO_INICIAL: EstadoProyecto = "Sin empezar";
+
+export const TODAS_LAS_COLUMNAS: EstadoProyecto[] = [ESTADO_INICIAL, ...ORDEN_ESTACIONES];
+
+export const SIGUIENTE_ESTADO: Record<EstadoProyecto, EstadoProyecto | null> = {
+  "Sin empezar": "Diseño",
+  "Diseño": "Corte",
+  "Corte": "Doblez",
+  "Doblez": "Soldadura",
+  "Soldadura": "Pintura",
+  "Pintura": "Ensamblaje",
+  "Ensamblaje": "Refrigeración",
+  "Refrigeración": "Eléctrica",
+  "Eléctrica": "Finalizado",
+  "Finalizado": null,
+};
+
+export interface Proyecto {
+  id: string;
+  notionPageId: string;
+  codigoProyecto: string | null;
+  equipo: string;
+  cliente: string;
+  personaACargo: string;
+  fechaInicio: string | null;
+  fechaEstimadaEntrega: string | null;
+  estado: EstadoProyecto;
+  avance: number;
+  prioridad: string;
+  entradaAEstacion: string | null;
+  entradas: EntradasEstaciones;
+  tiempoPorEstacion: string;
+  entradaDiseño: string | null;
+  entradaCorte: string | null;
+  entradaDoblez: string | null;
+  entradaSoldadura: string | null;
+  entradaPintura: string | null;
+  entradaEnsamblaje: string | null;
+  entradaRefrigeración: string | null;
+  entradaEléctrica: string | null;
+  entradaFinalizado: string | null;
+}
+
+export type EntradasEstaciones = Partial<Record<EstadoProyecto, string>>;
+
+export function normalizeName(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function estacionDeColumnaEntrada(propName: string): EstadoProyecto | null {
+  const n = normalizeName(propName);
+  const m = n.match(/^entrada a (.+)$/);
+  if (!m) return null;
+  const resto = m[1];
+  for (const est of ORDEN_ESTACIONES) {
+    const e = normalizeName(est);
+    if (resto === e || resto.startsWith(e.slice(0, 4))) return est;
+  }
+  return null;
+}
+
+export function findEntradaPropName(propNames: string[], estacion: EstadoProyecto): string | null {
+  return propNames.find((n) => estacionDeColumnaEntrada(n) === estacion) ?? null;
+}
+
+export function nowBogotaISO(date: Date = new Date()): string {
+  const shifted = new Date(date.getTime() - 5 * 60 * 60 * 1000);
+  return shifted.toISOString().replace(/\.\d{3}Z$/, "-05:00");
+}
+
+function getRichText(prop: any): string {
+  if (!prop || !Array.isArray(prop.rich_text)) return "";
+  return prop.rich_text.map((t: any) => t?.plain_text ?? "").join("");
+}
+
+function getSelect(prop: any): string {
+  return prop?.select?.name ?? "";
+}
+
+function getStatus(prop: any): string {
+  return prop?.status?.name ?? "";
+}
+
+function getNumber(prop: any): number | null {
+  return typeof prop?.number === "number" ? prop.number : null;
+}
+
+function getDate(prop: any): string | null {
+  return prop?.date?.start ?? null;
+}
+
+function isEstadoProyecto(value: string): value is EstadoProyecto {
+  return (TODAS_LAS_COLUMNAS as string[]).includes(value);
+}
 
 export function mapNotionPageToProyecto(page: any): Proyecto {
   const props = page?.properties ?? {};
   const estadoRaw = getStatus(props[NOTION_PROPS.estado]);
-  const estadoActual = (isEstadoProyecto(estadoRaw) ? estadoRaw : ESTADO_INICIAL) as EstadoProyecto;
+  const estadoActual = (isEstadoProyecto(estadoRaw) ? estadoRaw : estadoRaw || ESTADO_INICIAL) as EstadoProyecto;
 
   const entradas: EntradasEstaciones = {};
-  // Leer primero por los nombres exactos de la base FROZZ.
-  for (const estacion of ORDEN_ESTACIONES) {
-    const prop = props[ENTRADA_PROPS[estacion]];
-    const fecha = getDate(prop);
-    if (fecha) entradas[estacion] = fecha;
-  }
 
-  // Compatibilidad adicional por si Notion devuelve una propiedad con una
-  // variación menor de nombre (acentos/mayúsculas) en alguna instalación.
-  for (const [name, prop] of Object.entries<any>(props)) {
-    const estacion = estacionDeColumnaEntrada(name);
-    if (!estacion || entradas[estacion]) continue;
-    const fecha = getDate(prop);
-    if (fecha) entradas[estacion] = fecha;
-  }
-
-  // Lee todas las columnas "Entrada a <Estación>" (tipo Date).
-  const entradas: EntradasEstaciones = {};
+  // Lee y completa todas las columnas "Entrada a <Estación>" (tipo Date).
   for (const [name, prop] of Object.entries<any>(props)) {
     const est = estacionDeColumnaEntrada(name);
     if (!est) continue;
     const fecha = getDate(prop);
     if (fecha) entradas[est] = fecha;
   }
-  const estadoActual = (isEstadoProyecto(estadoRaw) ? estadoRaw : estadoRaw || ESTADO_INICIAL) as EstadoProyecto;
 
   const proyecto: Proyecto = {
     id: page.id,
@@ -272,7 +400,6 @@ export function mapNotionPageToProyecto(page: any): Proyecto {
       entradas[estadoActual] ?? getDate(props[NOTION_PROPS.entradaAEstacionLegacy]),
     entradas,
     tiempoPorEstacion: getRichText(props[NOTION_PROPS.tiempoPorEstacion]),
-    // Propiedades de entrada individual
     entradaDiseño: entradas["Diseño"] ?? null,
     entradaCorte: entradas["Corte"] ?? null,
     entradaDoblez: entradas["Doblez"] ?? null,
@@ -300,7 +427,84 @@ export function orSinInformacion(value: string | null | undefined): string {
 }
 
 export type ProyectoUpdateFields = Partial<{
-  codigoProyecto: number;
+  codigoProyecto: string;
+  equipo: string;
+  cliente: string;
+  personaACargo: string;
+  fechaInicio: string | null;
+  fechaEstimadaEntrega: string | null;
+  estado: EstadoProyecto;
+  avance: number;
+  prioridad: string;
+  tiempoPorEstacion: string;
+  entradas: Partial<Record<EstadoProyecto, string | null>>;
+}>;
+
+export function buildNotionPropertiesPayload(
+  updates: ProyectoUpdateFields,
+  datePropNames: string[] = [],
+): { properties: Record<string, any>; missing: EstadoProyecto[] } {
+  const properties: Record<string, any> = {};
+  const missing: EstadoProyecto[] = [];
+
+  if (updates.codigoProyecto !== undefined) {
+    properties[NOTION_PROPS.codigoProyecto] = {
+      rich_text: updates.codigoProyecto ? [{ text: { content: String(updates.codigoProyecto) } }] : [],
+    };
+  }
+  if (updates.equipo !== undefined) {
+    properties[NOTION_PROPS.equipo] = {
+      rich_text: updates.equipo ? [{ text: { content: updates.equipo } }] : [],
+    };
+  }
+  if (updates.cliente !== undefined) {
+    properties[NOTION_PROPS.cliente] = {
+      rich_text: updates.cliente ? [{ text: { content: updates.cliente } }] : [],
+    };
+  }
+  if (updates.personaACargo !== undefined) {
+    properties[NOTION_PROPS.personaACargo] = { select: { name: updates.personaACargo } };
+  }
+  if (updates.fechaInicio !== undefined) {
+    properties[NOTION_PROPS.fechaInicio] = {
+      date: updates.fechaInicio ? { start: updates.fechaInicio } : null,
+    };
+  }
+  if (updates.fechaEstimadaEntrega !== undefined) {
+    properties[NOTION_PROPS.fechaEstimadaEntrega] = {
+      date: updates.fechaEstimadaEntrega ? { start: updates.fechaEstimadaEntrega } : null,
+    };
+  }
+  if (updates.estado !== undefined) {
+    properties[NOTION_PROPS.estado] = { status: { name: updates.estado } };
+  }
+  if (updates.avance !== undefined) {
+    properties[NOTION_PROPS.avance] = { number: updates.avance };
+  }
+  if (updates.prioridad !== undefined) {
+    properties[NOTION_PROPS.prioridad] = { select: { name: updates.prioridad } };
+  }
+  if (updates.tiempoPorEstacion !== undefined) {
+    properties[NOTION_PROPS.tiempoPorEstacion] = {
+      rich_text: updates.tiempoPorEstacion ? [{ text: { content: updates.tiempoPorEstacion } }] : [],
+    };
+  }
+  if (updates.entradas) {
+    for (const [est, fecha] of Object.entries(updates.entradas) as [EstadoProyecto, string | null][]) {
+      const propName = findEntradaPropName(datePropNames, est);
+      if (!propName) {
+        missing.push(est);
+        continue;
+      }
+      properties[propName] = { date: fecha ? { start: fecha } : null };
+    }
+  }
+
+  return { properties, missing };
+}
+
+export type ProyectoUpdateFields = Partial<{
+  codigoProyecto: string;
   equipo: string;
   cliente: string;
   personaACargo: string;
