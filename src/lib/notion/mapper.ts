@@ -29,7 +29,7 @@
 //   Tiempo por estación        -> Rich text (acumulativo)
 
 export const NOTION_PROPS = {
-  codigoProyecto: "Código Proyecto",
+  codigoProyecto: "ID Proyecto",
   equipo: "Equipo",
   cliente: "Cliente",
   personaACargo: "Persona a cargo",
@@ -111,7 +111,7 @@ export const SIGUIENTE_ESTADO: Record<EstadoProyecto, EstadoProyecto | null> = {
 export interface Proyecto {
   id: string;
   notionPageId: string;
-  codigoProyecto: number | null;
+  codigoProyecto: string | null;
   equipo: string;
   cliente: string;
   personaACargo: string;
@@ -259,7 +259,7 @@ export function mapNotionPageToProyecto(page: any): Proyecto {
   const proyecto: Proyecto = {
     id: page.id,
     notionPageId: page.id,
-    codigoProyecto: getNumber(props[NOTION_PROPS.codigoProyecto]),
+    codigoProyecto: getRichText(props[NOTION_PROPS.codigoProyecto]),
     equipo: getRichText(props[NOTION_PROPS.equipo]),
     cliente: getRichText(props[NOTION_PROPS.cliente]),
     personaACargo: getSelect(props[NOTION_PROPS.personaACargo]),
