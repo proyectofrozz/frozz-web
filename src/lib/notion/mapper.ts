@@ -368,7 +368,6 @@ function getDate(prop: any): string | null {
 function isEstadoProyecto(value: string): value is EstadoProyecto {
   return (TODAS_LAS_COLUMNAS as string[]).includes(value);
 }
-
 export function mapNotionPageToProyecto(page: any): Proyecto {
   const props = page?.properties ?? {};
   const estadoRaw = getStatus(props[NOTION_PROPS.estado]);
