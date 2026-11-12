@@ -27,7 +27,14 @@
 //
 //   Entrada a [Estación]       -> Date (para cada estación de producción)
 //   Tiempo por estación        -> Rich text (acumulativo)
+// src/lib/notion/mapper.ts
+//
+// Capa centralizada de mapping entre Notion y el modelo de datos de la aplicación.
+// Ningún componente ni endpoint debe leer `page.properties[...]` directamente:
+// toda página de Notion debe pasar por `mapNotionPageToProyecto` antes de llegar
+// a React, y toda actualización debe construirse con `buildNotionPropertiesPayload`.
 
+/** Nombres exactos de las propiedades de la base de datos de Notion. */
 export const NOTION_PROPS = {
   codigoProyecto: "ID Proyecto",
   equipo: "Equipo",
@@ -42,20 +49,21 @@ export const NOTION_PROPS = {
   entradaAEstacionLegacy: "Entrada a estación",
   entradaAEstacion: "Entrada a estación",
   tiempoPorEstacion: "Tiempo por estación",
-  entradaDiseño: "Entrada a Diseño",
-  entradaCorte: "Entrada a Corte",
-  entradaDoblez: "Entrada a Doblez",
-  entradaSoldadura: "Entrada a Soldadura",
-  entradaPintura: "Entrada a Pintura",
-  entradaEnsamblaje: "Entrada a Ensamblaje",
-  entradaRefrigeración: "Entrada a Refrigeración",
-  entradaEléctrica: "Entrada a Eléctrica",
-  entradaFinalizado: "Entrada a Finalizado",
-  tiempoPorEstacion: "Tiempo por estación",
 } as const;
 
+export type EstadoProyecto =
+  | "Sin empezar"
+  | "Diseño"
+  | "Corte"
+  | "Doblez"
+  | "Soldadura"
+  | "Pintura"
+  | "Ensamblaje"
+  | "Refrigeración"
+  | "Eléctrica"
+  | "Finalizado";
+
 // Nombres exactos de las propiedades Date que existen en la base de Notion.
-// Se mantienen explícitos porque estas columnas son parte del contrato del MES.
 export const ENTRADA_PROPS: Record<EstadoProyecto, string> = {
   "Sin empezar": "Entrada a estación",
   "Diseño": "Entrada a Diseño",
@@ -68,17 +76,6 @@ export const ENTRADA_PROPS: Record<EstadoProyecto, string> = {
   "Eléctrica": "Entrada a Eléctrica",
   "Finalizado": "Entrada a Finalizado",
 };
-export type EstadoProyecto =
-  | "Sin empezar"
-  | "Diseño"
-  | "Corte"
-  | "Doblez"
-  | "Soldadura"
-  | "Pintura"
-  | "Ensamblaje"
-  | "Refrigeración"
-  | "Eléctrica"
-  | "Finalizado";
 
 export const ORDEN_ESTACIONES: EstadoProyecto[] = [
   "Diseño",
@@ -93,6 +90,7 @@ export const ORDEN_ESTACIONES: EstadoProyecto[] = [
 ];
 
 export const ESTADO_INICIAL: EstadoProyecto = "Sin empezar";
+
 export const TODAS_LAS_COLUMNAS: EstadoProyecto[] = [ESTADO_INICIAL, ...ORDEN_ESTACIONES];
 
 export const SIGUIENTE_ESTADO: Record<EstadoProyecto, EstadoProyecto | null> = {
@@ -107,6 +105,8 @@ export const SIGUIENTE_ESTADO: Record<EstadoProyecto, EstadoProyecto | null> = {
   "Eléctrica": "Finalizado",
   "Finalizado": null,
 };
+
+export type EntradasEstaciones = Partial<Record<EstadoProyecto, string>>;
 
 export interface Proyecto {
   id: string;
@@ -126,17 +126,17 @@ export interface Proyecto {
   tiempoPorEstacion: string;
   /** Fecha/hora (ISO) en que el proyecto entró a cada estación, leída de Notion. */
   entradas: EntradasEstaciones;
-  // Propiedades de entrada individual para acceso directo
-  entradaDiseño?: string | null;
-  entradaCorte?: string | null;
-  entradaDoblez?: string | null;
-  entradaSoldadura?: string | null;
-  entradaPintura?: string | null;
-  entradaEnsamblaje?: string | null;
-  entradaRefrigeración?: string | null;
-  entradaEléctrica?: string | null;
-  entradaFinalizado?: string | null;
+  entradaDiseño: string | null;
+  entradaCorte: string | null;
+  entradaDoblez: string | null;
+  entradaSoldadura: string | null;
+  entradaPintura: string | null;
+  entradaEnsamblaje: string | null;
+  entradaRefrigeración: string | null;
+  entradaEléctrica: string | null;
+  entradaFinalizado: string | null;
 }
+
 export function normalizeName(value: string): string {
   return value
     .normalize("NFD")
@@ -173,32 +173,13 @@ export function findEntradaPropName(propNames: string[], estacion: EstadoProyect
 /**
  * Devuelve la fecha/hora actual en formato ISO con la zona horaria de Bogotá
  * (UTC-5, sin horario de verano), p. ej. "2026-09-29T14:35:00-05:00".
- * Así Notion muestra exactamente la hora local de la planta.
  */
 export function nowBogotaISO(date: Date = new Date()): string {
-  // Usar la zona horaria de Bogotá directamente
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Bogota',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-
-  const parts = formatter.formatToParts(date);
-  const year = parts.find((p) => p.type === 'year')?.value;
-  const month = parts.find((p) => p.type === 'month')?.value;
-  const day = parts.find((p) => p.type === 'day')?.value;
-  const hour = parts.find((p) => p.type === 'hour')?.value;
-  const minute = parts.find((p) => p.type === 'minute')?.value;
-  const second = parts.find((p) => p.type === 'second')?.value;
-
-  return `${year}-${month}-${day}T${hour}:${minute}:${second}-05:00`;
+  const shifted = new Date(date.getTime() - 5 * 60 * 60 * 1000);
+  return shifted.toISOString().replace(/\.\d{3}Z$/, "-05:00");
 }
 
+/** true si la hora actual en Bogotá está entre 8:00 y 17:00. */
 export function isWithinWorkday(date: Date = new Date()): boolean {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Bogota",
@@ -210,138 +191,6 @@ export function isWithinWorkday(date: Date = new Date()): boolean {
   const minute = Number(parts.find((p) => p.type === "minute")?.value ?? -1);
   const minutes = hour * 60 + minute;
   return minutes >= 8 * 60 && minutes < 17 * 60;
-}
-
-function getRichText(prop: any): string {
-  if (!prop || !Array.isArray(prop.rich_text)) return "";
-  return prop.rich_text.map((item: any) => item?.plain_text ?? "").join("");
-}
-function getSelect(prop: any): string { return prop?.select?.name ?? ""; }
-function getStatus(prop: any): string { return prop?.status?.name ?? ""; }
-function getNumber(prop: any): number | null { return typeof prop?.number === "number" ? prop.number : null; }
-function getDate(prop: any): string | null { return prop?.date?.start ?? null; }
-function isEstadoProyecto(value: string): value is EstadoProyecto {
-  return (TODAS_LAS_COLUMNAS as string[]).includes(value);
-}
-// src/lib/notion/mapper.ts
-//
-// Capa centralizada de mapping entre Notion y el modelo de datos de la aplicación.
-// Ningún componente ni endpoint debe leer `page.properties[...]` directamente:
-// toda página de Notion debe pasar por `mapNotionPageToProyecto` antes de llegar
-// a React, y toda actualización debe construirse con `buildNotionPropertiesPayload`.
-
-/** Nombres exactos de las propiedades de la base de datos de Notion. */
-export const NOTION_PROPS = {
-  codigoProyecto: "ID Proyecto",
-  equipo: "Equipo",
-  cliente: "Cliente",
-  personaACargo: "Persona a cargo",
-  fechaInicio: "Fecha de inicio",
-  fechaEstimadaEntrega: "Fecha estimada de entrega",
-  estado: "Estado",
-  avance: "Avance",
-  prioridad: "Prioridad",
-  entradaAEstacionLegacy: "Entrada a estación",
-  tiempoPorEstacion: "Tiempo por estación",
-} as const;
-
-export type EstadoProyecto =
-  | "Sin empezar"
-  | "Diseño"
-  | "Corte"
-  | "Doblez"
-  | "Soldadura"
-  | "Pintura"
-  | "Ensamblaje"
-  | "Refrigeración"
-  | "Eléctrica"
-  | "Finalizado";
-
-export const ORDEN_ESTACIONES: EstadoProyecto[] = [
-  "Diseño",
-  "Corte",
-  "Doblez",
-  "Soldadura",
-  "Pintura",
-  "Ensamblaje",
-  "Refrigeración",
-  "Eléctrica",
-  "Finalizado",
-];
-
-export const ESTADO_INICIAL: EstadoProyecto = "Sin empezar";
-
-export const TODAS_LAS_COLUMNAS: EstadoProyecto[] = [ESTADO_INICIAL, ...ORDEN_ESTACIONES];
-
-export const SIGUIENTE_ESTADO: Record<EstadoProyecto, EstadoProyecto | null> = {
-  "Sin empezar": "Diseño",
-  "Diseño": "Corte",
-  "Corte": "Doblez",
-  "Doblez": "Soldadura",
-  "Soldadura": "Pintura",
-  "Pintura": "Ensamblaje",
-  "Ensamblaje": "Refrigeración",
-  "Refrigeración": "Eléctrica",
-  "Eléctrica": "Finalizado",
-  "Finalizado": null,
-};
-
-export interface Proyecto {
-  id: string;
-  notionPageId: string;
-  codigoProyecto: string | null;
-  equipo: string;
-  cliente: string;
-  personaACargo: string;
-  fechaInicio: string | null;
-  fechaEstimadaEntrega: string | null;
-  estado: EstadoProyecto;
-  avance: number;
-  prioridad: string;
-  entradaAEstacion: string | null;
-  entradas: EntradasEstaciones;
-  tiempoPorEstacion: string;
-  entradaDiseño: string | null;
-  entradaCorte: string | null;
-  entradaDoblez: string | null;
-  entradaSoldadura: string | null;
-  entradaPintura: string | null;
-  entradaEnsamblaje: string | null;
-  entradaRefrigeración: string | null;
-  entradaEléctrica: string | null;
-  entradaFinalizado: string | null;
-}
-
-export type EntradasEstaciones = Partial<Record<EstadoProyecto, string>>;
-
-export function normalizeName(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-export function estacionDeColumnaEntrada(propName: string): EstadoProyecto | null {
-  const n = normalizeName(propName);
-  const m = n.match(/^entrada a (.+)$/);
-  if (!m) return null;
-  const resto = m[1];
-  for (const est of ORDEN_ESTACIONES) {
-    const e = normalizeName(est);
-    if (resto === e || resto.startsWith(e.slice(0, 4))) return est;
-  }
-  return null;
-}
-
-export function findEntradaPropName(propNames: string[], estacion: EstadoProyecto): string | null {
-  return propNames.find((n) => estacionDeColumnaEntrada(n) === estacion) ?? null;
-}
-
-export function nowBogotaISO(date: Date = new Date()): string {
-  const shifted = new Date(date.getTime() - 5 * 60 * 60 * 1000);
-  return shifted.toISOString().replace(/\.\d{3}Z$/, "-05:00");
 }
 
 function getRichText(prop: any): string {
@@ -368,6 +217,7 @@ function getDate(prop: any): string | null {
 function isEstadoProyecto(value: string): value is EstadoProyecto {
   return (TODAS_LAS_COLUMNAS as string[]).includes(value);
 }
+
 export function mapNotionPageToProyecto(page: any): Proyecto {
   const props = page?.properties ?? {};
   const estadoRaw = getStatus(props[NOTION_PROPS.estado]);
@@ -383,10 +233,14 @@ export function mapNotionPageToProyecto(page: any): Proyecto {
     if (fecha) entradas[est] = fecha;
   }
 
+  // ID Proyecto puede ser Number o Text en Notion; se acepta cualquiera de los dos.
+  const codigoNumero = getNumber(props[NOTION_PROPS.codigoProyecto]);
+  const codigoTexto = getRichText(props[NOTION_PROPS.codigoProyecto]);
+
   const proyecto: Proyecto = {
     id: page.id,
     notionPageId: page.id,
-    codigoProyecto: getRichText(props[NOTION_PROPS.codigoProyecto]),
+    codigoProyecto: codigoNumero !== null ? String(codigoNumero) : codigoTexto || null,
     equipo: getRichText(props[NOTION_PROPS.equipo]),
     cliente: getRichText(props[NOTION_PROPS.cliente]),
     personaACargo: getSelect(props[NOTION_PROPS.personaACargo]),
@@ -435,12 +289,19 @@ export type ProyectoUpdateFields = Partial<{
   estado: EstadoProyecto;
   avance: number;
   prioridad: string;
+  entradaAEstacion: string | null;
   tiempoPorEstacion: string;
+  /** Estación -> ISO con fecha y hora (o null para borrar la fecha). */
   entradas: Partial<Record<EstadoProyecto, string | null>>;
 }>;
 
+/**
+ * Construye el objeto `properties` que espera `PATCH /v1/pages/{id}` de Notion,
+ * respetando el tipo real de cada propiedad (Estado es Status; ID Proyecto y Avance son Number).
+ */
 export function buildNotionPropertiesPayload(
   updates: ProyectoUpdateFields,
+  /** Nombres reales de las propiedades de tipo Date de la base de datos. */
   datePropNames: string[] = [],
 ): { properties: Record<string, any>; missing: EstadoProyecto[] } {
   const properties: Record<string, any> = {};
@@ -448,26 +309,20 @@ export function buildNotionPropertiesPayload(
 
   if (updates.codigoProyecto !== undefined) {
     properties[NOTION_PROPS.codigoProyecto] = {
-      rich_text: updates.codigoProyecto ? [{ text: { content: String(updates.codigoProyecto) } }] : [],
+      number: updates.codigoProyecto ? Number(updates.codigoProyecto) : null,
     };
   }
   if (updates.equipo !== undefined) {
-    properties[NOTION_PROPS.equipo] = {
-      rich_text: updates.equipo ? [{ text: { content: updates.equipo } }] : [],
-    };
+    properties[NOTION_PROPS.equipo] = { rich_text: updates.equipo ? [{ text: { content: updates.equipo } }] : [] };
   }
   if (updates.cliente !== undefined) {
-    properties[NOTION_PROPS.cliente] = {
-      rich_text: updates.cliente ? [{ text: { content: updates.cliente } }] : [],
-    };
+    properties[NOTION_PROPS.cliente] = { rich_text: updates.cliente ? [{ text: { content: updates.cliente } }] : [] };
   }
   if (updates.personaACargo !== undefined) {
     properties[NOTION_PROPS.personaACargo] = { select: { name: updates.personaACargo } };
   }
   if (updates.fechaInicio !== undefined) {
-    properties[NOTION_PROPS.fechaInicio] = {
-      date: updates.fechaInicio ? { start: updates.fechaInicio } : null,
-    };
+    properties[NOTION_PROPS.fechaInicio] = { date: updates.fechaInicio ? { start: updates.fechaInicio } : null };
   }
   if (updates.fechaEstimadaEntrega !== undefined) {
     properties[NOTION_PROPS.fechaEstimadaEntrega] = {
@@ -488,58 +343,6 @@ export function buildNotionPropertiesPayload(
       rich_text: updates.tiempoPorEstacion ? [{ text: { content: updates.tiempoPorEstacion } }] : [],
     };
   }
-  if (updates.entradas) {
-    for (const [est, fecha] of Object.entries(updates.entradas) as [EstadoProyecto, string | null][]) {
-      const propName = findEntradaPropName(datePropNames, est);
-      if (!propName) {
-        missing.push(est);
-        continue;
-      }
-      properties[propName] = { date: fecha ? { start: fecha } : null };
-    }
-  }
-
-  return { properties, missing };
-}
-
-export type ProyectoUpdateFields = Partial<{
-  codigoProyecto: string;
-  equipo: string;
-  cliente: string;
-  personaACargo: string;
-  fechaInicio: string | null;
-  fechaEstimadaEntrega: string | null;
-  estado: EstadoProyecto;
-  avance: number;
-  prioridad: string;
-  entradaAEstacion: string | null;
-  tiempoPorEstacion: string;
-  /** Estación -> ISO con fecha y hora (o null para borrar la fecha). */
-  entradas: Partial<Record<EstadoProyecto, string | null>>;
-}>;
-
-/**
- * Construye el objeto `properties` que espera `PATCH /v1/pages/{id}` de Notion,
- * respetando el tipo real de cada propiedad (en particular: Estado es Status,
- * no Select; Código Proyecto y Avance son Number, no texto).
- */
-export function buildNotionPropertiesPayload(
-  updates: ProyectoUpdateFields,
-  /** Nombres reales de las propiedades de tipo Date de la base de datos. */
-  datePropNames: string[] = [],
-): { properties: Record<string, any>; missing: EstadoProyecto[] } {
-  const properties: Record<string, any> = {};
-  const missing: EstadoProyecto[] = [];
-
-  if (updates.codigoProyecto !== undefined) properties[NOTION_PROPS.codigoProyecto] = { number: updates.codigoProyecto };
-  if (updates.equipo !== undefined) properties[NOTION_PROPS.equipo] = { rich_text: updates.equipo ? [{ text: { content: updates.equipo } }] : [] };
-  if (updates.cliente !== undefined) properties[NOTION_PROPS.cliente] = { rich_text: updates.cliente ? [{ text: { content: updates.cliente } }] : [] };
-  if (updates.personaACargo !== undefined) properties[NOTION_PROPS.personaACargo] = { select: { name: updates.personaACargo } };
-  if (updates.fechaInicio !== undefined) properties[NOTION_PROPS.fechaInicio] = { date: updates.fechaInicio ? { start: updates.fechaInicio } : null };
-  if (updates.fechaEstimadaEntrega !== undefined) properties[NOTION_PROPS.fechaEstimadaEntrega] = { date: updates.fechaEstimadaEntrega ? { start: updates.fechaEstimadaEntrega } : null };
-  if (updates.estado !== undefined) properties[NOTION_PROPS.estado] = { status: { name: updates.estado } };
-  if (updates.avance !== undefined) properties[NOTION_PROPS.avance] = { number: updates.avance };
-  if (updates.prioridad !== undefined) properties[NOTION_PROPS.prioridad] = { select: { name: updates.prioridad } };
 
   if (updates.entradas) {
     for (const [estacion, fecha] of Object.entries(updates.entradas) as [EstadoProyecto, string | null][]) {
@@ -551,14 +354,10 @@ export function buildNotionPropertiesPayload(
       properties[propName] = { date: fecha ? { start: fecha } : null };
     }
   }
+
   if (updates.entradaAEstacion !== undefined) {
     properties[NOTION_PROPS.entradaAEstacion] = {
       date: updates.entradaAEstacion ? { start: updates.entradaAEstacion } : null,
-    };
-  }
-  if (updates.tiempoPorEstacion !== undefined) {
-    properties[NOTION_PROPS.tiempoPorEstacion] = {
-      rich_text: updates.tiempoPorEstacion ? [{ text: { content: updates.tiempoPorEstacion } }] : [],
     };
   }
 
